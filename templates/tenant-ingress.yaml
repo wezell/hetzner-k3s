@@ -1,0 +1,67 @@
+---
+# Per-tenant Ingress declaration — routes ${INSTANCE}.${BASE_DOMAIN} to the dotCMS Service.
+#
+# Architecture note:
+#   Caddy's cname_router plugin handles actual traffic routing by naming convention:
+#     • Incoming hostname stripped of BASE_DOMAIN suffix → service name
+#     • Resolved against headless svc ${INSTANCE}-hl.${TENANT_ID}.svc.cluster.local
+#     • lb_session cookie provides sticky-session routing to a specific pod IP
+#   This resource does NOT drive Caddy's routing (Caddy is a plain Deployment,
+#   not an ingress controller). Instead it serves as:
+#     1. Machine-readable declaration of hostname → service routing intent.
+#     2. Discoverable inventory: kubectl get ingress -A shows all live routes.
+#     3. Authoritative source for the caddy-webhook domain validator
+#        (webhook checks the ${TENANT_ID} namespace exists with managed-by label).
+#     4. Lifecycle anchor: deleted by tenant-remove.sh --env-only alongside the
+#        Deployment and Services it documents.
+#
+# Routing chain for https://${INSTANCE}.${BASE_DOMAIN}:
+#   DNS wildcard *.${BASE_DOMAIN}  →  Caddy LoadBalancer IP
+#   Caddy :443 on_demand_tls       →  issues cert (webhook-validated)
+#   cname_router plugin            →  proxies to ${INSTANCE} ClusterIP svc :80
+#   ClusterIP svc                  →  dotCMS pod :8082
+#
+# Custom domain support:
+#   Tenant CNAMEs their-domain.com → ${INSTANCE}.${BASE_DOMAIN}
+#   cname_router resolves CNAME chain → same pod IPs (no extra config needed)
+#
+# Variables substituted by tenant-add.sh via envsubst before kubectl apply:
+#   ${INSTANCE}    → ${TENANT_ID}-${ENV_ID}  (e.g. acme-prod)
+#   ${TENANT_ID}   → tenant namespace         (e.g. acme)
+#   ${BASE_DOMAIN} → cluster base domain      (e.g. botcms.cloud)
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${INSTANCE}
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "${INSTANCE}"
+    app.kubernetes.io/managed-by: tenant-add
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+  annotations:
+    # Routing handled by Caddy cname_router — this Ingress is declarative only.
+    # The cname_router discovers services by convention (name = subdomain prefix),
+    # so no ingress-controller watch or path-rule processing occurs.
+    botcms.cloud/routing: "cname_router"
+    botcms.cloud/hostname: "${INSTANCE}.${BASE_DOMAIN}"
+    # Record the headless service used for sticky-session routing.
+    botcms.cloud/headless-svc: "${INSTANCE}-hl"
+spec:
+  # Caddy is deployed as a plain Deployment (not an ingress controller).
+  # ingressClassName is set for documentation and future ingress-controller
+  # compatibility; it does not affect current cname_router-based routing.
+  ingressClassName: caddy
+  rules:
+    - host: "${INSTANCE}.${BASE_DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: "${INSTANCE}"
+                port:
+                  number: 80

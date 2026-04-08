@@ -1,0 +1,154 @@
+# scripts/values/prometheus-values.yaml
+# Helm values for kube-prometheus-stack deployed on hetzner-k3s
+#
+# Key overrides:
+#   - All images pulled from mirror.gcr.io (not Docker Hub)
+#   - Persistent storage for Prometheus (10Gi) and Alertmanager (2Gi)
+#   - 7-day metric retention
+#   - Grafana enabled and configured for observe.botcms.cloud
+#   - Grafana admin password injected at deploy time via --set
+#   - Grafana Kubernetes Ingress disabled — Caddy handles routing directly
+
+grafana:
+  enabled: true
+  image:
+    repository: mirror.gcr.io/grafana/grafana
+    pullPolicy: IfNotPresent
+  sidecar:
+    image:
+      repository: mirror.gcr.io/kiwigrid/k8s-sidecar
+  # adminPassword is injected at install time via --set grafana.adminPassword=...
+  persistence:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+  # Disable the chart's own Ingress — Caddy reverse-proxies directly to the
+  # Service (kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80)
+  # without going through a Kubernetes Ingress resource.
+  ingress:
+    enabled: false
+  # Grafana server config — sets public URL for link generation and OAuth redirects.
+  # Matches the Caddy ingress route: observe.{BASE_DOMAIN}
+  grafana.ini:
+    server:
+      domain: observe.botcms.cloud
+      root_url: "https://observe.botcms.cloud/"
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    auth.anonymous:
+      enabled: false
+
+  # ── Loki datasource ────────────────────────────────────────────────────────
+  # Provisioned automatically at Grafana startup via kube-prometheus-stack sidecar.
+  # Loki is deployed in Phase 2 of install-monitoring.sh (same monitoring namespace).
+  #
+  # auth_enabled=true in loki-values.yaml requires X-Scope-OrgID on every request.
+  # Default tenant "monitoring" lets Explore work immediately after deploy.
+  # Per-tenant log exploration uses a $namespace dashboard variable to override.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki-gateway.monitoring.svc.cluster.local
+      access: proxy
+      isDefault: false
+      jsonData:
+        maxLines: 5000
+        httpHeaderName1: "X-Scope-OrgID"
+      secureJsonData:
+        httpHeaderValue1: "monitoring"
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+    # Use mirror.gcr.io for Prometheus server image
+    image:
+      registry: mirror.gcr.io
+      repository: prometheus/prometheus
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi
+    # Use mirror.gcr.io for Alertmanager image
+    image:
+      registry: mirror.gcr.io
+      repository: prometheus/alertmanager
+
+prometheusOperator:
+  admissionWebhooks:
+    enabled: true
+  # Use mirror.gcr.io for the operator image
+  image:
+    registry: mirror.gcr.io
+    repository: prometheus-operator/prometheus-operator
+  prometheusConfigReloader:
+    image:
+      registry: mirror.gcr.io
+      repository: prometheus-operator/prometheus-config-reloader
+
+# k3s-specific: disable components that conflict with k3s embedded etcd/scheduler
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# ── kube-state-metrics subchart ────────────────────────────────────────────────
+# Override image registry to avoid Docker Hub rate limits.
+# kube-prometheus-stack v61.x bundles ksm v2.x via its subchart.
+kube-state-metrics:
+  image:
+    registry: mirror.gcr.io
+    repository: kube-state-metrics/kube-state-metrics
+
+# ── prometheus-node-exporter subchart ─────────────────────────────────────────
+# DaemonSet deployed by kube-prometheus-stack; one pod per node.
+# Override image registry to avoid Docker Hub rate limits.
+prometheus-node-exporter:
+  image:
+    registry: mirror.gcr.io
+    repository: prometheus/node-exporter
+
+# ── k3s API server scrape target ──────────────────────────────────────────────
+# k3s exposes the API server via the 'kubernetes' Service in the default
+# namespace, which carries the labels kube-prometheus-stack looks for.
+# Explicitly enabled here to document the expectation.
+kubeApiServer:
+  enabled: true
+
+# ── Kubelet scrape target ──────────────────────────────────────────────────────
+# k3s runs kubelet with HTTPS metrics on port 10250.
+# kube-prometheus-stack discovers nodes and scrapes both /metrics and
+# /metrics/cadvisor (cAdvisor). Enabled by default; noted explicitly.
+kubelet:
+  enabled: true
+  serviceMonitor:
+    # k3s kubelets present self-signed certs — skip server TLS verification
+    https: true
+    insecureSkipVerify: true
+
+# ── CoreDNS scrape target ──────────────────────────────────────────────────────
+# k3s ships CoreDNS; the chart's ServiceMonitor discovers it via the
+# 'k8s-app: kube-dns' label selector on the kube-dns Service.
+coreDns:
+  enabled: true

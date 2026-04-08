@@ -1,0 +1,53 @@
+---
+# Per-tenant CaddyRoute registration — ConfigMap in the caddy-ingress namespace.
+#
+# Purpose:
+#   Registers the tenant route as a discoverable catalog entry inside Caddy's
+#   namespace. This provides a cluster-scoped audit trail of active routes and
+#   serves as the authoritative source for tooling (e.g. verify-caddy-ingress.sh).
+#
+# How Caddy actually routes traffic:
+#   Caddy's cname_router plugin auto-discovers services by naming convention —
+#   it does NOT watch these ConfigMaps. The route becomes active as soon as the
+#   ${INSTANCE} ClusterIP Service exists in namespace ${TENANT_ID} and Caddy's
+#   ClusterRole allows list/watch on services cluster-wide.
+#
+#   Routing chain for https://${INSTANCE}.${BASE_DOMAIN}:
+#     DNS wildcard *.${BASE_DOMAIN}    →  Caddy LoadBalancer IP
+#     Caddy :443 on_demand_tls         →  issues cert (webhook-validated)
+#     cname_router strips BASE_DOMAIN  →  service name = "${INSTANCE}"
+#     K8s API lookup                   →  headless svc ${INSTANCE}-hl.${TENANT_ID}
+#     lb_session cookie                →  sticky pod IP routing
+#
+# Lifecycle:
+#   Created by:  tenant-add.sh Step 9
+#   Deleted by:  tenant-remove.sh (--env-only deletes individually; full removal
+#                deletes via explicit kubectl delete before namespace teardown)
+#
+# Variables substituted by tenant-add.sh via envsubst before kubectl apply:
+#   ${INSTANCE}    → ${TENANT_ID}-${ENV_ID}  (e.g. acme-prod)
+#   ${TENANT_ID}   → tenant namespace         (e.g. acme)
+#   ${BASE_DOMAIN} → cluster base domain      (e.g. botcms.cloud)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "route-${INSTANCE}"
+  namespace: caddy-ingress
+  labels:
+    app.kubernetes.io/managed-by: tenant-add
+    botcms.cloud/type: caddy-route
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+  annotations:
+    botcms.cloud/hostname: "${INSTANCE}.${BASE_DOMAIN}"
+    botcms.cloud/headless-svc: "${INSTANCE}-hl.${TENANT_ID}.svc.cluster.local"
+    botcms.cloud/clusterip-svc: "${INSTANCE}.${TENANT_ID}.svc.cluster.local"
+data:
+  tenant: "${TENANT_ID}"
+  instance: "${INSTANCE}"
+  hostname: "${INSTANCE}.${BASE_DOMAIN}"
+  headless-svc: "${INSTANCE}-hl.${TENANT_ID}.svc.cluster.local"
+  clusterip-svc: "${INSTANCE}.${TENANT_ID}.svc.cluster.local"
+  service-port: "8082"
+  cookie-name: "lb_session"

@@ -1,0 +1,56 @@
+---
+# Tenant namespace — one per customer, shared across all their environments.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: TENANT_ID
+  labels:
+    botcms.cloud/tenant: "TENANT_ID"
+
+---
+# ResourceQuota — caps total resource consumption for all environments in this tenant namespace.
+# Sized for up to 3 concurrent environments, each with up to 6 dotCMS pods (HPA max).
+#   3 envs × 6 pods × 1 CPU  = 18 CPU  → quota 20 CPU
+#   3 envs × 6 pods × 4 Gi   = 72 Gi   → quota 80 Gi requests
+#   3 envs × 6 pods × 5 Gi   = 90 Gi   → quota 100 Gi limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: TENANT_ID
+spec:
+  hard:
+    requests.cpu:       "20"
+    requests.memory:    "80Gi"
+    limits.memory:      "100Gi"
+    pods:               "30"
+    services:           "20"
+    persistentvolumeclaims: "10"
+
+---
+# LimitRange — sets defaults for containers that omit resource specs,
+# and prevents runaway containers with no upper bound.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-limits
+  namespace: TENANT_ID
+spec:
+  limits:
+    - type: Container
+      # Default request applied when a container omits requests (e.g. init containers).
+      defaultRequest:
+        cpu:    "100m"
+        memory: "256Mi"
+      # Default limit applied when a container omits limits.
+      default:
+        cpu:    "2"
+        memory: "5Gi"
+      # Absolute caps — no single container may exceed these.
+      max:
+        cpu:    "4"
+        memory: "6Gi"
+      # Minimum to prevent zero-resource containers from skewing scheduling.
+      min:
+        cpu:    "50m"
+        memory: "64Mi"

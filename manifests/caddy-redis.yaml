@@ -1,0 +1,61 @@
+---
+# Valkey for Caddy cert storage (Redis-compatible, open-source fork).
+# Single instance — cert storage is low-traffic, not a critical data path.
+# AOF persistence ensures certs survive pod restarts without re-issuance.
+# Shared by all Caddy replicas; no PVC race since writes are serialised by Caddy.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: caddy-redis
+  namespace: caddy-ingress
+spec:
+  serviceName: caddy-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: caddy-redis
+  template:
+    metadata:
+      labels:
+        app: caddy-redis
+    spec:
+      containers:
+        - name: valkey
+          image: mirror.gcr.io/valkey/valkey:8-alpine
+          args: ["valkey-server", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-redis
+  namespace: caddy-ingress
+spec:
+  selector:
+    app: caddy-redis
+  ports:
+    - port: 6379

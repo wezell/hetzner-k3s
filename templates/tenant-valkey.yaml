@@ -1,0 +1,58 @@
+---
+# Valkey ExternalName Service — one per tenant namespace (idempotent, shared across all
+# environments in the namespace). Resolves the local name 'valkey' within the tenant
+# namespace to the cluster-wide Valkey master service in the 'valkey' namespace.
+#
+# Benefit: dotCMS pods use 'valkey:6379' (or the Secret host field) without
+# hardcoding cross-namespace FQDNs in environment config.
+#
+# Required substitutions: TENANT_ID
+# Applied by: tenant-add.sh (idempotent — kubectl apply)
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/managed-by: hetzner-k3s
+    botcms.cloud/tenant: "${TENANT_ID}"
+spec:
+  type: ExternalName
+  externalName: valkey-master.valkey.svc.cluster.local
+  ports:
+    - name: redis
+      port: 6379
+      protocol: TCP
+
+---
+# Valkey connection credentials — one per tenant environment (instance).
+# Consumed by dotCMS pods via secretKeyRef in templates/dotcms-deployment.yaml.
+#
+# Fields:
+#   host     — cluster-internal FQDN of the shared Valkey master service
+#   port     — Valkey port (always 6379)
+#   password — auth password; empty string if Valkey auth is disabled
+#   url      — full Redis URL for frameworks that accept a connection string
+#
+# Required substitutions: ${INSTANCE}  ${TENANT_ID}  ${VALKEY_PASSWORD}
+# Applied by: tenant-add.sh (idempotent — kubectl apply)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${INSTANCE}-valkey
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: valkey
+    app.kubernetes.io/managed-by: hetzner-k3s
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+type: Opaque
+stringData:
+  host: "valkey-master.valkey.svc.cluster.local"
+  port: "6379"
+  password: "${VALKEY_PASSWORD}"
+  # Full Redis URL — use DOT_CACHE_REDIS_URL or equivalent dotCMS config key.
+  # With password:    redis://:${VALKEY_PASSWORD}@valkey-master.valkey.svc.cluster.local:6379
+  # Without password: redis://valkey-master.valkey.svc.cluster.local:6379
+  url: "${VALKEY_URL}"

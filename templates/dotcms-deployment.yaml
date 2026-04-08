@@ -1,0 +1,307 @@
+---
+# dotCMS Deployment — one per tenant environment, lives in the tenant namespace.
+# Variables substituted by tenant-add.sh via envsubst before kubectl apply:
+#   ${INSTANCE}         → ${TENANT_ID}-${ENV_ID}  (e.g. acme-prod)
+#   ${TENANT_ID}        → tenant namespace          (e.g. acme)
+#   ${DOTCMS_IMAGE}     → fully-qualified image ref (e.g. mirror.gcr.io/dotcms/dotcms:LTS-24.10)
+#   ${CPU_REQUEST}      → CPU request               (e.g. 1)
+#   ${MEMORY_REQUEST}   → memory request            (e.g. 4Gi)
+#   ${MEMORY_LIMIT}     → memory limit              (e.g. 5Gi)
+#
+# Prerequisites (must exist before applying):
+#   - Namespace ${TENANT_ID}               (from templates/tenant-namespace.yaml)
+#   - Secret    ${INSTANCE}-postgres       (created by tenant-add.sh Step 4)
+#   - Secret    ${INSTANCE}-os-creds       (created by tenant-add.sh Step 3)
+#   - PVC       ${INSTANCE}-assets         (from templates/tenant-pvc.yaml)
+#
+# Database: shared CloudNativePG cluster in the 'postgres' namespace.
+#   Read-write endpoint: postgres-rw.postgres.svc.cluster.local:5432
+#   Per-tenant database name = ${INSTANCE}, role = ${INSTANCE}.
+#
+# Routing & TLS are handled by Caddy (cluster-wide caddy-ingress).
+# Tenants CNAME their custom domains to ${INSTANCE}.botcms.cloud —
+# no per-domain cert or IngressRoute config is required.
+#
+# Database connection pool: HikariCP max_pool_size=10 (50 envs × 10 = 500 < max_connections=600).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${INSTANCE}
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "${INSTANCE}"
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  replicas: 1
+  minReadySeconds: 30
+  selector:
+    matchLabels:
+      app: dotcms
+      instance: "${INSTANCE}"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: dotcms
+        instance: "${INSTANCE}"
+        botcms.cloud/tenant: "${TENANT_ID}"
+        botcms.cloud/instance: "${INSTANCE}"
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: dotcms
+          # Use mirror.gcr.io instead of Docker Hub to avoid rate limits.
+          image: ${DOTCMS_IMAGE}
+          imagePullPolicy: Always
+
+          resources:
+            requests:
+              cpu: "${CPU_REQUEST}"
+              memory: "${MEMORY_REQUEST}"
+            limits:
+              memory: "${MEMORY_LIMIT}"
+
+          env:
+            # --- JVM tuning ---
+            - name: JAVA_OPTS_MEMORY
+              value: "-XX:MaxRAMPercentage=66"
+            - name: CMS_JAVA_OPTS
+              value: "-Dlog4j2.formatMsgNoLookups=true -XX:+UseG1GC -XX:-UseZGC"
+
+            # --- TLS (terminated by Caddy — disable dotCMS's own SSL) ---
+            # Traffic arrives on port 8082 (plain HTTP, scheme=https).
+            - name: CMS_DISABLE_APR_SSL
+              value: "true"
+            - name: CMS_SSL_ENABLED
+              value: "false"
+
+            # --- Cluster identity ---
+            # Scopes cache-invalidation events to this tenant+env.
+            # dotCMS uses PostgreSQL pub/sub for cache invalidation — not Hazelcast.
+            - name: DOT_DOTCMS_CLUSTER_ID
+              value: "${INSTANCE}"
+
+            # --- Database (shared CloudNativePG cluster in 'postgres' namespace) ---
+            # Read-write service: postgres-rw.postgres.svc.cluster.local:5432
+            # Per-tenant database and role = ${INSTANCE}
+            - name: DB_BASE_URL
+              value: "jdbc:postgresql://postgres-rw.postgres.svc.cluster.local:5432/${INSTANCE}"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: "${INSTANCE}-postgres"
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "${INSTANCE}-postgres"
+                  key: password
+            # HikariCP: 10 connections per env × 50 envs = 500 < max_connections=600
+            - name: DOT_DB_MAX_TOTAL
+              value: "10"
+            - name: DOT_DB_MAX_IDLE
+              value: "5"
+
+            # --- OpenSearch (cluster-wide, per-tenant user) ---
+            - name: DOT_ES_ENDPOINTS
+              value: "https://opensearch-cluster-master.opensearch.svc.cluster.local:9200"
+            - name: DOT_ES_AUTH_TYPE
+              value: BASIC
+            - name: DOT_ES_AUTH_BASIC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: "${INSTANCE}-os-creds"
+                  key: username
+            - name: DOT_ES_AUTH_BASIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "${INSTANCE}-os-creds"
+                  key: password
+
+            # --- Security hardening ---
+            - name: DOT_REMOTE_CALL_SUBNET_BLACKLIST
+              value: "169.254.169.254/32,127.0.0.1/32,172.16.0.0/12,192.168.0.0/16"
+            - name: DOT_SYSTEM_STATUS_API_IP_ACL
+              value: "0.0.0.0/0"
+
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8082
+              name: https
+
+          volumeMounts:
+            - name: assets
+              mountPath: /data/shared
+            - name: ssl-certs
+              mountPath: /data/shared/assets/certs
+
+          startupProbe:
+            httpGet:
+              path: /api/v1/probes/heavy
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 60
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/probes/light
+              port: 8082
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/v1/probes/light
+              port: 8082
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 6
+            timeoutSeconds: 10
+
+      volumes:
+        - name: assets
+          persistentVolumeClaim:
+            claimName: "${INSTANCE}-assets"
+        - name: ssl-certs
+          emptyDir: {}
+
+      # Prefer dotCMS-tainted nodes; fall back to any schedulable node.
+      tolerations:
+        - key: "node.kubernetes.io/server-usage"
+          operator: Equal
+          value: "dotcms"
+          effect: NoSchedule
+
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/server-usage
+                    operator: In
+                    values:
+                      - dotcms
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: instance
+                    operator: In
+                    values:
+                      - "${INSTANCE}"
+              topologyKey: kubernetes.io/hostname
+
+---
+# PodDisruptionBudget — allow at most 1 unavailable pod during node drain / rolling updates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ${INSTANCE}
+  namespace: ${TENANT_ID}
+  labels:
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dotcms
+      instance: "${INSTANCE}"
+
+---
+# HorizontalPodAutoscaler — scales dotCMS pods 1→6 based on CPU utilisation.
+# podAntiAffinity spreads pods across nodes; cluster autoscaler provisions
+# new nodes when pods cannot be scheduled.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${INSTANCE}
+  namespace: ${TENANT_ID}
+  labels:
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ${INSTANCE}
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+---
+# ClusterIP Service — used by Caddy to proxy requests to this tenant environment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${INSTANCE}
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "${INSTANCE}"
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  selector:
+    app: dotcms
+    instance: "${INSTANCE}"
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8082
+
+---
+# Headless Service — returns individual pod IPs via DNS lookup.
+# Caddy's cname_router plugin uses this for sticky-session routing:
+#   net.LookupHost("${INSTANCE}-hl.${TENANT_ID}.svc.cluster.local") → [pod IPs]
+# The plugin reads the lb_session cookie to route repeat requests to the same pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${INSTANCE}-hl
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "${INSTANCE}"
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  clusterIP: None
+  selector:
+    app: dotcms
+    instance: "${INSTANCE}"
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8082

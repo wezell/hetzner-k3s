@@ -1,0 +1,52 @@
+# Caddy configuration for multi-tenant dotCMS with CNAME-based custom domains.
+#
+# Build with xcaddy:
+#   xcaddy build --with github.com/dotcms/caddy-cname-router=./plugins/caddy-cname-router
+#
+# How it works:
+#   customer.com  --CNAME--> bigcorp-dev.botcms.cloud
+#                            ↓ plugin extracts tenant=bigcorp, env=dev
+#                            ↓ verifies k8s DNS: bigcorp-dev.bigcorp.svc.cluster.local
+#                            ↓ proxies, Host: customer.com preserved
+#                            ↓ dotCMS serves the correct site
+
+{
+    # On-demand TLS: issue certs for any domain whose CNAME points to a valid tenant.
+    # The cname_router permission module gates issuance — no external ask service needed.
+    on_demand_tls {
+        permission cname_router {
+            base_domain botcms.cloud
+        }
+    }
+
+    # Optional: rate-limit cert issuance to avoid hammering Let's Encrypt
+    # on_demand_tls {
+    #     interval 2m
+    #     burst    5
+    # }
+}
+
+# Catch-all: handles *.botcms.cloud AND any custom domain whose CNAME points here.
+# TLS is obtained on-demand for unknown domains.
+:443 {
+    tls {
+        on_demand
+    }
+
+    route {
+        cname_router {
+            base_domain botcms.cloud
+            # separator defaults to "-"
+            # cache_ttl defaults to 5m
+            # negative_cache_ttl defaults to 30s
+        }
+
+        # Fallback: unknown hosts get a 404
+        respond "Not found" 404
+    }
+}
+
+# Redirect HTTP → HTTPS
+:80 {
+    redir https://{host}{uri} permanent
+}

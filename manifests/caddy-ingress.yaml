@@ -1,0 +1,235 @@
+---
+# Caddy ingress — replaces Traefik for all public traffic.
+#
+# Routing:
+#   *.botcms.cloud         → cname_router plugin → tenant dotCMS pod (sticky)
+#   custom domains         → CNAME lookup → cname_router → same tenant pod
+#   observe.botcms.cloud   → Grafana (monitoring namespace)
+#   manage.botcms.cloud    → Headlamp (headlamp namespace)
+#
+# TLS:
+#   On-demand TLS for all domains. Certs issued automatically on first HTTPS hit.
+#   Permission gated by cname_router — only valid tenant CNAMEs get certs.
+#   observe/manage use standard on-demand TLS (always permitted as *.botcms.cloud).
+#
+# Sticky sessions:
+#   cname_router resolves headless service DNS → individual pod IPs.
+#   Sets lb_session cookie with chosen pod IP. Routes repeat requests to same pod.
+#
+# Cert storage:
+#   Valkey StatefulSet (caddy-redis), AOF persistence.
+#   Shared across all replicas — no PVC, true HA.
+#
+# Variables (envsubst before apply):
+#   ${BASE_DOMAIN}   — e.g. botcms.cloud
+#   ${ACME_EMAIL}    — e.g. ops@botcms.cloud
+#
+# Before applying:
+#   # Create BasicAuth secret for internal dashboards (not committed to git):
+#   HASH=$(htpasswd -nbB admin '<password>' | cut -d: -f2)
+#   kubectl create secret generic caddy-admin-auth \
+#     --from-literal=user='admin' \
+#     --from-literal=hash="$HASH" \
+#     -n caddy-ingress
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: caddy-ingress
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy-config
+  namespace: caddy-ingress
+data:
+  Caddyfile: |
+    {
+        # On-demand TLS: two-gate validation before issuing a cert.
+        #   1. ask — namespace webhook confirms a live tenant namespace exists.
+        #   2. cname_router — validates the CNAME resolves to the cluster LB.
+        # Both gates must pass; either a missing namespace or wrong CNAME denies.
+        on_demand_tls {
+            permission cname_router {
+                base_domain {$BASE_DOMAIN}
+            }
+        }
+
+        # Store certs in Valkey — shared across all replicas, no PVC needed.
+        storage redis {
+            address caddy-redis.caddy-ingress.svc.cluster.local:6379
+            key_prefix caddy
+        }
+
+        email {$ACME_EMAIL}
+    }
+
+    # Internal dashboards — Caddy-managed ACME TLS (named vhosts get certs automatically).
+    # BasicAuth credentials sourced from caddy-admin-auth Secret injected as env vars.
+    observe.{$BASE_DOMAIN} {
+        basicauth {
+            {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
+        }
+        reverse_proxy kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80
+    }
+
+    manage.{$BASE_DOMAIN} {
+        basicauth {
+            {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
+        }
+        reverse_proxy headlamp.headlamp.svc.cluster.local:80
+    }
+
+    # Catch-all: tenant dotCMS instances + all custom domains.
+    # cname_router handles routing; falls through to 404 for unknowns.
+    :443 {
+        tls {
+            on_demand
+        }
+
+        route {
+            cname_router {
+                base_domain {$BASE_DOMAIN}
+                cookie_name lb_session
+                service_port 8082
+            }
+
+            respond "tenant not found" 404
+        }
+    }
+
+    :80 {
+        # route preserves explicit order: health check must come before redir
+        route {
+            respond /health 200
+            redir https://{host}{uri} permanent
+        }
+    }
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: caddy-ingress
+  namespace: caddy-ingress
+
+---
+# RBAC: Caddy's cname_router plugin needs to list/watch Services across all
+# tenant namespaces to resolve headless service DNS and route to pod IPs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: caddy-ingress
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: caddy-ingress
+subjects:
+  - kind: ServiceAccount
+    name: caddy-ingress
+    namespace: caddy-ingress
+roleRef:
+  kind: ClusterRole
+  name: caddy-ingress
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy-ingress
+  namespace: caddy-ingress
+  labels:
+    app: caddy-ingress
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: caddy-ingress
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: caddy-ingress
+    spec:
+      serviceAccountName: caddy-ingress
+      containers:
+        - name: caddy
+          image: dotcms/caddy-cname:latest
+          imagePullPolicy: Always
+          args: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+          env:
+            - name: BASE_DOMAIN
+              value: "${BASE_DOMAIN}"
+            - name: ACME_EMAIL
+              value: "${ACME_EMAIL}"
+            - name: CADDY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: caddy-admin-auth
+                  key: user
+            - name: CADDY_ADMIN_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: caddy-admin-auth
+                  key: hash
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: config
+              mountPath: /etc/caddy
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: caddy-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-ingress
+  namespace: caddy-ingress
+  annotations:
+    # Hetzner Cloud LB placement — ash region matches cluster nodes
+    load-balancer.hetzner.cloud/location: ash
+    load-balancer.hetzner.cloud/name: caddy-ingress
+spec:
+  type: LoadBalancer
+  selector:
+    app: caddy-ingress
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: https
+      port: 443
+      targetPort: 443

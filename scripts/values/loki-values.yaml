@@ -1,0 +1,194 @@
+# scripts/values/loki-values.yaml
+# Helm values for Grafana Loki deployed on hetzner-k3s (grafana/loki chart v6.x)
+#
+# Deployment mode: SingleBinary (monolithic) — appropriate for ~50 active tenants
+# Storage backend: Wasabi S3-compatible object storage
+# Retention: 30 days
+#
+# S3 credentials are injected at install time via --set:
+#   helm upgrade --install loki grafana/loki -f scripts/values/loki-values.yaml \
+#     --set loki.storage.s3.accessKeyId="${WASABI_ACCESS_KEY}" \
+#     --set loki.storage.s3.secretAccessKey="${WASABI_SECRET_KEY}"
+#
+# Requires WASABI_LOKI_BUCKET env var — a dedicated bucket separate from pg-backup
+# and assets buckets (e.g., dotcms-loki-logs).
+
+deploymentMode: SingleBinary
+
+# ── Images (mirror.gcr.io to avoid Docker Hub rate limits) ──────────────────
+loki:
+  image:
+    repository: mirror.gcr.io/grafana/loki
+    pullPolicy: IfNotPresent
+
+  # ── Auth / Multi-tenancy ──────────────────────────────────────────────────
+  # Enable multi-tenancy so each dotCMS namespace can ship logs with X-Scope-OrgID
+  # header. Promtail sets tenant_id to the Kubernetes namespace name automatically.
+  auth_enabled: true
+
+  # ── Storage configuration ──────────────────────────────────────────────────
+  storage:
+    type: s3
+    bucketNames:
+      # All Loki data (chunks, ruler, admin) in one dedicated bucket.
+      # Sub-prefixed internally by Loki per data type.
+      chunks: ${WASABI_LOKI_BUCKET}
+      ruler: ${WASABI_LOKI_BUCKET}
+      admin: ${WASABI_LOKI_BUCKET}
+    s3:
+      # Wasabi S3-compatible endpoint — adjust region subdomain if needed
+      endpoint: https://s3.wasabisys.com
+      region: us-east-1          # overridden by --set if WASABI_REGION differs
+      s3ForcePathStyle: true     # required for non-AWS S3-compatible endpoints
+      # accessKeyId and secretAccessKey injected at deploy time via --set
+      accessKeyId: ""
+      secretAccessKey: ""
+
+  # ── Schema / TSDB ─────────────────────────────────────────────────────────
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: s3
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  # ── Retention ─────────────────────────────────────────────────────────────
+  limits_config:
+    retention_period: 720h           # 30 days
+
+    # ── Per-tenant ingestion limits (sized for ~50 active dotCMS envs) ──────
+    # Each dotCMS pod generates ~500KB/s of logs under load; 50 envs → ~25MB/s
+    # burst. Set generous per-stream limits with hard cluster-level cap.
+    ingestion_rate_mb: 8             # MB/s per tenant (namespace)
+    ingestion_burst_size_mb: 16      # burst allowance per tenant
+    max_streams_per_user: 5000       # max active log streams per tenant
+    max_entries_limit_per_query: 50000
+    max_query_series_limit: 2000
+    max_query_lookback: 720h         # match retention
+    max_query_parallelism: 8         # parallel shards per query
+
+    # ── Label cardinality controls ────────────────────────────────────────
+    max_label_names_per_series: 20
+    max_label_value_length: 2048
+
+    # ── Volume / global ingestion ceiling ────────────────────────────────
+    # Cluster-wide ceiling: 50 tenants × 8 MB/s = ~400 MB/s max theoretical;
+    # set to 200 MB/s as realistic peak to prevent runaway ingestion.
+    # Applied at the Loki distributor layer.
+    per_stream_rate_limit: 4MB
+    per_stream_rate_limit_burst: 8MB
+
+  # ── Compactor (handles retention enforcement) ──────────────────────────────
+  compactor:
+    working_directory: /var/loki/compactor
+    retention_enabled: true
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 10
+    delete_request_store: s3
+
+  # ── Query performance ──────────────────────────────────────────────────────
+  query_range:
+    results_cache:
+      cache:
+        embedded_cache:
+          enabled: true
+          max_size_mb: 256
+
+  # ── Ruler (alerting rules) ─────────────────────────────────────────────────
+  ruler:
+    storage:
+      type: s3
+      s3:
+        # Re-uses the same bucket with a different prefix set by loki internally
+        endpoint: https://s3.wasabisys.com
+        region: us-east-1
+        s3ForcePathStyle: true
+
+# ── Single Binary replica count ───────────────────────────────────────────────
+singleBinary:
+  replicas: 1        # scale to 2 for HA once cluster stabilises
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  persistence:
+    # Local WAL + compactor working dir; S3 is the durable store
+    enabled: true
+    size: 10Gi
+    storageClass: local-path    # k3s built-in; no block storage dependency
+
+# ── Disable components not needed in single-binary mode ──────────────────────
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+# ── Promtail — sidecar log shipper deployed as DaemonSet ─────────────────────
+promtail:
+  enabled: true
+  image:
+    repository: mirror.gcr.io/grafana/promtail
+    pullPolicy: IfNotPresent
+
+  config:
+    # Ship to the loki gateway inside the cluster
+    clients:
+      - url: http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
+        tenant_id: "{{ .Namespace }}"    # namespace = tenant isolation unit
+
+    # Scrape all pod logs and enrich with k8s metadata
+    snippets:
+      pipelineStages:
+        - cri: {}
+        - labeldrop:
+            - filename    # high-cardinality; drop to reduce stream count
+
+      # Extra relabeling: expose tenant_id and environment labels
+      extraRelabelConfigs:
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_label_tenant_id]
+          target_label: tenant_id
+        - source_labels: [__meta_kubernetes_pod_label_env_id]
+          target_label: env_id
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          target_label: container
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ── Gateway (nginx proxy — provides /loki/api endpoint) ───────────────────────
+gateway:
+  enabled: true
+  replicas: 1
+  image:
+    repository: mirror.gcr.io/nginxinc/nginx-unprivileged
+    pullPolicy: IfNotPresent
+
+# ── Monitoring self-metrics ────────────────────────────────────────────────────
+monitoring:
+  selfMonitoring:
+    enabled: false    # avoid circular dependency during bootstrapping
+  serviceMonitor:
+    enabled: true     # scraped by kube-prometheus-stack
+  dashboards:
+    enabled: true     # auto-imported into Grafana via sidecar
+
+# ── Test pod (disable in production) ─────────────────────────────────────────
+test:
+  enabled: false

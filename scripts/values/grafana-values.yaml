@@ -1,0 +1,150 @@
+# scripts/values/grafana-values.yaml
+# Standalone Grafana Helm values for hetzner-k3s
+#
+# Usage (consumed by install-monitoring.sh):
+#   helm upgrade --install grafana grafana/grafana \
+#     -n monitoring --create-namespace \
+#     -f scripts/values/grafana-values.yaml
+#
+# Key design decisions:
+#   - Admin credentials sourced from a pre-created Kubernetes Secret
+#     (grafana-admin-secret in monitoring namespace) — never stored in values
+#   - Persistent storage on hcloud-volumes StorageClass (Hetzner Block)
+#   - Pre-wired Prometheus datasource pointing to in-cluster kube-prometheus-stack service
+#   - All images pulled from mirror.gcr.io to avoid Docker Hub rate limits
+#   - Dashboard sidecar enabled for ConfigMap-driven dashboard provisioning
+
+image:
+  repository: mirror.gcr.io/grafana/grafana
+  tag: ""           # uses chart appVersion by default
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Admin credentials — reference a pre-existing Kubernetes Secret
+# Secret must contain keys: admin-user, admin-password
+# Create with:
+#   kubectl create secret generic grafana-admin-secret \
+#     -n monitoring \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password="${GRAFANA_ADMIN_PASSWORD}"
+# ---------------------------------------------------------------------------
+admin:
+  existingSecret: grafana-admin-secret
+  userKey: admin-user
+  passwordKey: admin-password
+
+# ---------------------------------------------------------------------------
+# Persistence — Hetzner Block storage via hcloud-volumes StorageClass
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  storageClassName: hcloud-volumes
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  finalizers:
+    - kubernetes.io/pvc-protection
+
+# ---------------------------------------------------------------------------
+# Pre-wired Prometheus datasource (kube-prometheus-stack in-cluster service)
+# ---------------------------------------------------------------------------
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        access: proxy
+        isDefault: true
+        jsonData:
+          timeInterval: 30s
+          httpMethod: POST
+
+# ---------------------------------------------------------------------------
+# Dashboard sidecar — auto-imports ConfigMaps labelled grafana_dashboard=1
+# ---------------------------------------------------------------------------
+sidecar:
+  image:
+    repository: mirror.gcr.io/kiwigrid/k8s-sidecar
+    pullPolicy: IfNotPresent
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    searchNamespace: ALL
+    folderAnnotation: grafana_folder
+    provider:
+      foldersFromFilesStructure: true
+  datasources:
+    enabled: true
+    label: grafana_datasource
+    labelValue: "1"
+
+# ---------------------------------------------------------------------------
+# Default dashboards — dotCMS-relevant pre-installed dashboards
+# ---------------------------------------------------------------------------
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    # Kubernetes cluster overview
+    kubernetes-cluster:
+      gnetId: 7249
+      revision: 1
+      datasource: Prometheus
+    # Node exporter full
+    node-exporter:
+      gnetId: 1860
+      revision: 37
+      datasource: Prometheus
+
+# ---------------------------------------------------------------------------
+# Resource requests/limits
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Service — ClusterIP (exposed via Caddy ingress)
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+
+# ---------------------------------------------------------------------------
+# Grafana.ini overrides
+# ---------------------------------------------------------------------------
+grafana.ini:
+  server:
+    domain: observe.botcms.cloud
+    root_url: "https://observe.botcms.cloud/"
+  auth.anonymous:
+    enabled: false
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  log:
+    mode: console
+    level: warn
+  # Unified alerting (Grafana 9+)
+  unified_alerting:
+    enabled: true
+  alerting:
+    enabled: false

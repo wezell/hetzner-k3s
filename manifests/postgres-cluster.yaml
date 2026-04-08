@@ -1,0 +1,113 @@
+---
+# Shared CNPG PostgreSQL cluster for all tenant environments.
+# Processed by install-postgres-cluster.sh via envsubst before applying.
+# Required env vars: WASABI_ACCESS_KEY_ID, WASABI_SECRET_ACCESS_KEY,
+#                    WASABI_BUCKET, WASABI_REGION
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/managed-by: hetzner-k3s
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wasabi-backup-creds
+  namespace: postgres
+type: Opaque
+stringData:
+  ACCESS_KEY_ID: "${WASABI_ACCESS_KEY_ID}"
+  ACCESS_SECRET_KEY: "${WASABI_SECRET_ACCESS_KEY}"
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+  namespace: postgres
+spec:
+  instances: 3
+
+  # TimescaleDB HA image — includes CNPG tooling + TimescaleDB 2.x on PostgreSQL 16.
+  # Mirror of docker.io/timescale/timescaledb-ha via mirror.gcr.io (Docker Hub mirror).
+  imageName: mirror.gcr.io/timescale/timescaledb-ha:pg16-all
+
+  bootstrap:
+    initdb:
+      # Runs against template1 so every new tenant database inherits these extensions.
+      postInitTemplateSQL:
+        # Time-series
+        - CREATE EXTENSION IF NOT EXISTS timescaledb
+        # Search
+        - CREATE EXTENSION IF NOT EXISTS pg_trgm
+        - CREATE EXTENSION IF NOT EXISTS unaccent
+        - CREATE EXTENSION IF NOT EXISTS citext
+        # Data & indexing
+        - CREATE EXTENSION IF NOT EXISTS pgcrypto
+        - CREATE EXTENSION IF NOT EXISTS btree_gin
+        - CREATE EXTENSION IF NOT EXISTS btree_gist
+        - CREATE EXTENSION IF NOT EXISTS intarray
+        # Observability
+        - CREATE EXTENSION IF NOT EXISTS pg_stat_statements
+
+  # Spread instances across nodes — losing one node must not take down the primary
+  # and all replicas simultaneously. Required (hard) so the scheduler never co-locates
+  # two postgres instances on the same node; autoscaler provisions a new node if needed.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  storage:
+    size: 50Gi
+    storageClass: hcloud-volumes
+
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+  postgresql:
+    shared_preload_libraries:
+      - timescaledb
+    parameters:
+      max_connections: "600"
+      shared_buffers: "256MB"
+      default_toast_compression: "lz4"
+      # timescaledb.telemetry_level=off disables phone-home telemetry
+      timescaledb.telemetry_level: "off"
+
+  backup:
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      destinationPath: "s3://${WASABI_BUCKET}/postgres"
+      endpointURL: "https://s3.${WASABI_REGION}.wasabisys.com"
+      s3Credentials:
+        accessKeyId:
+          name: wasabi-backup-creds
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: wasabi-backup-creds
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: gzip
+      data:
+        compression: gzip
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: postgres-daily
+  namespace: postgres
+spec:
+  schedule: "0 0 2 * * *"
+  cluster:
+    name: postgres
+  backupOwnerReference: self

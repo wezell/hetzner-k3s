@@ -1,0 +1,58 @@
+# cluster-issuer.yaml — Let's Encrypt ClusterIssuers for botcms.cloud
+#
+# Provides two cert-manager ClusterIssuers:
+#   letsencrypt-staging — for testing; avoids LE rate limits
+#   letsencrypt-botcms  — production issuer (used by monitoring, headlamp, etc.)
+#
+# NOTE: Tenant TLS is handled by Caddy on-demand (cname_router plugin), not
+# cert-manager. These issuers are for cluster-internal services that need
+# cert-manager-managed certs (e.g. observe.botcms.cloud, manage.botcms.cloud).
+#
+# HTTP01 challenge routing: cert-manager creates a temporary Pod + Service for
+# each challenge. Port 80 on the Caddy LoadBalancer must be reachable from
+# Let's Encrypt. The Caddy :80 block routes /health but lets LE challenge
+# traffic through to cert-manager's solver service via standard k8s routing.
+#
+# Variables substituted by envsubst at deploy time:
+#   ${ACME_EMAIL}   — contact email for Let's Encrypt account registration
+#   ${BASE_DOMAIN}  — e.g. botcms.cloud (used in name/comments only)
+
+---
+# Staging issuer — use while validating; switch annotation when confirmed working.
+# cert-manager.io/cluster-issuer: letsencrypt-staging
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/part-of: cluster-infra
+    managed-by: deploy.sh
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: "${ACME_EMAIL}"
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress: {}
+
+---
+# Production issuer — default issuer for botcms.cloud cluster services.
+# cert-manager.io/cluster-issuer: letsencrypt-botcms
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-botcms
+  labels:
+    app.kubernetes.io/part-of: cluster-infra
+    managed-by: deploy.sh
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: "${ACME_EMAIL}"
+    privateKeySecretRef:
+      name: letsencrypt-botcms-key
+    solvers:
+      - http01:
+          ingress: {}

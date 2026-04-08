@@ -1,0 +1,45 @@
+---
+# CNPG Database CRD — declares the tenant database in the shared postgres cluster.
+# Applied by tenant-add.sh Step 4 via envsubst.
+#
+# The Database resource must reside in the same namespace as the Cluster (postgres).
+# Role '${INSTANCE}' must already exist before CNPG reconciles this resource;
+# tenant-add.sh creates the role via kubectl exec SQL before applying this manifest.
+#
+# Required substitutions: ${INSTANCE}  ${TENANT_ID}
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: ${INSTANCE}
+  namespace: postgres
+  labels:
+    app.kubernetes.io/managed-by: hetzner-k3s
+    botcms.cloud/tenant: ${TENANT_ID}
+    botcms.cloud/instance: ${INSTANCE}
+spec:
+  # Logical database name inside PostgreSQL (matches the CNPG resource name).
+  name: ${INSTANCE}
+  # Must match a role that exists in the cluster — created via SQL exec in Step 4.
+  owner: ${INSTANCE}
+  cluster:
+    name: postgres
+
+---
+# Credentials Secret in the tenant namespace — consumed by dotCMS pods via secretKeyRef / envFrom.
+# Required substitutions: ${INSTANCE}  ${TENANT_ID}  ${PG_PASS}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${INSTANCE}-postgres
+  namespace: ${TENANT_ID}
+  labels:
+    app.kubernetes.io/managed-by: hetzner-k3s
+    botcms.cloud/tenant: ${TENANT_ID}
+    botcms.cloud/instance: ${INSTANCE}
+type: Opaque
+stringData:
+  host: "postgres-rw.postgres.svc.cluster.local"
+  port: "5432"
+  database: "${INSTANCE}"
+  username: "${INSTANCE}"
+  password: "${PG_PASS}"

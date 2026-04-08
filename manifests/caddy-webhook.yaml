@@ -1,0 +1,139 @@
+---
+# caddy-webhook — validates on_demand_tls ask requests from Caddy.
+# Caddy sends GET http://caddy-webhook.caddy.svc.cluster.local/check?domain=<host>
+# before issuing a TLS cert. Returns 200 (allow) only when the subdomain maps to
+# a live Kubernetes namespace labelled app.kubernetes.io/managed-by=dotcms.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: caddy
+  labels:
+    app.kubernetes.io/managed-by: caddy-webhook
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: caddy-webhook
+  namespace: caddy
+  labels:
+    app.kubernetes.io/name: caddy-webhook
+    app.kubernetes.io/component: webhook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: caddy-webhook-namespace-reader
+  labels:
+    app.kubernetes.io/name: caddy-webhook
+    app.kubernetes.io/component: webhook
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: caddy-webhook-namespace-reader
+  labels:
+    app.kubernetes.io/name: caddy-webhook
+    app.kubernetes.io/component: webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: caddy-webhook-namespace-reader
+subjects:
+  - kind: ServiceAccount
+    name: caddy-webhook
+    namespace: caddy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy-webhook
+  namespace: caddy
+  labels:
+    app.kubernetes.io/name: caddy-webhook
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: caddy-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: caddy-webhook
+        app.kubernetes.io/component: webhook
+    spec:
+      serviceAccountName: caddy-webhook
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+      containers:
+        - name: webhook
+          image: ${WEBHOOK_IMAGE}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: BASE_DOMAIN
+              value: "${BASE_DOMAIN}"
+            - name: PORT
+              value: "8080"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 2
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: caddy-webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-webhook
+  namespace: caddy
+  labels:
+    app.kubernetes.io/name: caddy-webhook
+    app.kubernetes.io/component: webhook
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: caddy-webhook
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

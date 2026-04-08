@@ -1,0 +1,62 @@
+---
+# Static PersistentVolume + PVC for dotCMS shared assets — S3-backed via csi-s3/geesefs.
+# One PV+PVC pair per environment. The PV is pre-bound to the PVC via claimRef.
+#
+# S3 path layout: WASABI_S3FUSE_BUCKET/TENANT_ID/INSTANCE
+#   e.g. dotcms-assets/customer/customer-prod
+#
+# Variables substituted by tenant-add.sh via envsubst before kubectl apply:
+#   INSTANCE              → TENANT_ID-ENV_ID   (e.g. customer-prod)
+#   TENANT_ID             → tenant namespace    (e.g. customer)
+#   WASABI_S3FUSE_BUCKET  → Wasabi assets bucket name
+#   ASSETS_STORAGE_SIZE   → logical size hint   (default: 20Gi)
+#
+# Note: ASSETS_STORAGE_SIZE is a hint only — actual storage is unlimited on S3.
+# Note: csi-s3-secret must exist in kube-system (created by deploy.sh install-csi-s3.sh).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ${INSTANCE}-assets
+  labels:
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  capacity:
+    storage: ${ASSETS_STORAGE_SIZE}
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: s3-fuse
+  claimRef:
+    namespace: ${TENANT_ID}
+    name: ${INSTANCE}-assets
+  csi:
+    driver: ru.yandex.s3.csi
+    volumeHandle: ${WASABI_S3FUSE_BUCKET}/${TENANT_ID}/${INSTANCE}
+    volumeAttributes:
+      bucket: ${WASABI_S3FUSE_BUCKET}
+      mounter: geesefs
+      options: "--cache /var/lib/geesefs-cache --memory-limit 5120 --dir-mode 0777 --file-mode 0666"
+    nodePublishSecretRef:
+      name: csi-s3-secret
+      namespace: kube-system
+    nodeStageSecretRef:
+      name: csi-s3-secret
+      namespace: kube-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${INSTANCE}-assets
+  namespace: ${TENANT_ID}
+  labels:
+    botcms.cloud/tenant: "${TENANT_ID}"
+    botcms.cloud/instance: "${INSTANCE}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: s3-fuse
+  volumeName: ${INSTANCE}-assets
+  resources:
+    requests:
+      storage: ${ASSETS_STORAGE_SIZE}

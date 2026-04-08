@@ -1,0 +1,6 @@
+# Secrets — never commit
+.env
+kubeconfig
+
+# Per-tenant credential files written by tenant-add.sh
+tenant-envs/

@@ -1,0 +1,54 @@
+---
+# ClusterIP Service — used by Caddy to proxy requests to this tenant environment.
+# Caddy's cname_router plugin resolves INSTANCE.TENANT_ID.svc.cluster.local to
+# route TENANT_ID-ENV_ID.botcms.cloud traffic to the correct pod pool.
+#
+# Variables substituted by tenant-add.sh via sed before kubectl apply:
+#   INSTANCE    → ${TENANT_ID}-${ENV_ID}  (e.g. acme-prod)
+#   TENANT_ID   → tenant namespace         (e.g. acme)
+apiVersion: v1
+kind: Service
+metadata:
+  name: INSTANCE
+  namespace: TENANT_ID
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "INSTANCE"
+    botcms.cloud/tenant: "TENANT_ID"
+    botcms.cloud/instance: "INSTANCE"
+spec:
+  type: ClusterIP
+  selector:
+    app: dotcms
+    instance: "INSTANCE"
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8082
+      protocol: TCP
+
+---
+# Headless Service — returns individual pod IPs via DNS lookup.
+# Caddy's cname_router plugin uses this for sticky-session routing:
+#   net.LookupHost("INSTANCE-hl.TENANT_ID.svc.cluster.local") → [pod IPs]
+# The plugin reads the lb_session cookie to route repeat requests to the same pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: INSTANCE-hl
+  namespace: TENANT_ID
+  labels:
+    app.kubernetes.io/name: dotcms
+    app.kubernetes.io/instance: "INSTANCE"
+    botcms.cloud/tenant: "TENANT_ID"
+    botcms.cloud/instance: "INSTANCE"
+spec:
+  clusterIP: None
+  selector:
+    app: dotcms
+    instance: "INSTANCE"
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8082
+      protocol: TCP

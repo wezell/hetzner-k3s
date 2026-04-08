@@ -1,0 +1,74 @@
+cluster_name: dotcms-hetzner-cluster
+kubeconfig_path: "./kubeconfig"  # or /cluster/kubeconfig if you are going to use Docker
+k3s_version: v1.32.0+k3s1
+protect_against_deletion: true
+
+networking:
+  ssh:
+    port: 22
+    use_agent: false
+    use_private_ip: false
+    public_key_path: "~/.ssh/id_rsa.pub"
+    private_key_path: "~/.ssh/id_rsa"
+  allowed_networks:
+    ssh:
+      - 0.0.0.0/0
+    api:
+      - 0.0.0.0/0
+    public_network:
+      ipv4: true
+      ipv6: true
+  cni:
+    enabled: true
+    mode: cilium
+    cilium_egress_gateway: true
+
+masters_pool:
+  instance_type: cpx21
+  instance_count: 3
+  locations:
+    - ash
+    - ash
+    - ash
+
+worker_node_pools:
+- name: medium
+  instance_type: cpx31
+  location: ash
+  autoscaling:
+    enabled: true
+    min_instances: 1
+    max_instances: 10
+
+- name: large
+  instance_type: cpx41
+  location: ash
+  autoscaling:
+    enabled: true
+    min_instances: 1
+    max_instances: 10
+
+- name: x-large
+  instance_type: cpx51
+  location: ash
+  autoscaling:
+    enabled: true
+    min_instances: 1
+    max_instances: 10
+
+addons:
+  metrics_server:
+    enabled: true
+  embedded_registry_mirror:
+    enabled: true
+
+k3s_upgrade_concurrency: 1
+
+additional_pre_k3s_commands:
+- apt update
+- apt upgrade -y
+
+additional_post_k3s_commands:
+- apt autoremove -y
+
+
