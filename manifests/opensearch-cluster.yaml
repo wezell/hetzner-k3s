@@ -30,12 +30,12 @@ metadata:
     app.kubernetes.io/component: search
 spec:
   general:
-    # OpenSearch 1.x (Apache-licensed, compatible with dotCMS search API)
     version: "1.3.19"
     httpPort: 9200
     serviceName: opensearch
-    # Mirror of docker.io/opensearchproject/opensearch — avoids Docker Hub rate limits
-    image: mirror.gcr.io/opensearchproject/opensearch
+    # Pin image with explicit tag — without a tag the operator pulls :latest (3.x) which breaks
+    image: mirror.gcr.io/opensearchproject/opensearch:1.3.19
+
 
   # Disable dashboards — not needed for headless search backend
   dashboards:

@@ -22,7 +22,7 @@ set -euo pipefail
 VALKEY_NAMESPACE="valkey"
 VALKEY_HELM_RELEASE="valkey"
 VALKEY_CHART="oci://registry-1.docker.io/bitnamicharts/valkey"  # Bitnami OCI — no mirror available for OCI charts
-VALKEY_VERSION="2.1.5"   # Valkey 8.x — check for latest stable before deploy
+VALKEY_VERSION="5.4.9"   # Valkey 8.x — check for latest stable before deploy
 WAIT_TIMEOUT=300         # seconds
 
 # Optional: set VALKEY_PASSWORD in .env to enable authentication.
@@ -62,7 +62,7 @@ install_valkey() {
   helm install "${VALKEY_HELM_RELEASE}" "${VALKEY_CHART}" \
     --version "${VALKEY_VERSION}" \
     --namespace "${VALKEY_NAMESPACE}" \
-    --set image.registry=mirror.gcr.io \
+    --set global.security.allowInsecureImages=false \
     --set architecture=standalone \
     "${auth_flags[@]}" \
     --set master.resources.requests.cpu=100m \
@@ -73,7 +73,6 @@ install_valkey() {
     --set master.persistence.size=2Gi \
     --set master.persistence.storageClass="" \
     --set metrics.enabled=true \
-    --set metrics.image.registry=mirror.gcr.io \
     --wait=false
 
   info "Valkey Helm release created"

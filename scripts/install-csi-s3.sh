@@ -18,7 +18,7 @@ set -euo pipefail
 
 CSI_S3_NAMESPACE="kube-system"
 CSI_S3_HELM_RELEASE="csi-s3"
-CSI_S3_VERSION="0.42.2"
+CSI_S3_VERSION="0.43.4"
 WAIT_TIMEOUT=300   # seconds
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'

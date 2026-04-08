@@ -1,7 +1,7 @@
 cluster_name: dotcms-hetzner-cluster
 kubeconfig_path: "./kubeconfig"  # or /cluster/kubeconfig if you are going to use Docker
 k3s_version: v1.32.0+k3s1
-protect_against_deletion: true
+protect_against_deletion: false
 
 networking:
   ssh:

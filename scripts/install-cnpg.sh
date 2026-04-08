@@ -47,7 +47,7 @@ install_cnpg() {
   helm install "${CNPG_HELM_RELEASE}" cnpg/cloudnative-pg \
     --version "${CNPG_VERSION}" \
     --namespace "${CNPG_NAMESPACE}" \
-    --set image.repository=mirror.gcr.io/cloudnative-pg/cloudnative-pg \
+    --set image.repository=ghcr.io/cloudnative-pg/cloudnative-pg \
     --set replicaCount=1 \
     --wait=false
 

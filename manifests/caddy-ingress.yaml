@@ -52,7 +52,7 @@ data:
         # Both gates must pass; either a missing namespace or wrong CNAME denies.
         on_demand_tls {
             permission cname_router {
-                base_domain {$BASE_DOMAIN}
+                base_domain ${BASE_DOMAIN}
             }
         }
 
@@ -62,19 +62,19 @@ data:
             key_prefix caddy
         }
 
-        email {$ACME_EMAIL}
+        email ${ACME_EMAIL}
     }
 
     # Internal dashboards — Caddy-managed ACME TLS (named vhosts get certs automatically).
     # BasicAuth credentials sourced from caddy-admin-auth Secret injected as env vars.
-    observe.{$BASE_DOMAIN} {
+    observe.${BASE_DOMAIN} {
         basicauth {
             {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
         }
         reverse_proxy kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80
     }
 
-    manage.{$BASE_DOMAIN} {
+    manage.${BASE_DOMAIN} {
         basicauth {
             {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
         }
@@ -90,7 +90,7 @@ data:
 
         route {
             cname_router {
-                base_domain {$BASE_DOMAIN}
+                base_domain ${BASE_DOMAIN}
                 cookie_name lb_session
                 service_port 8082
             }

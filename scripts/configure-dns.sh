@@ -43,7 +43,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 DNS_TTL="${DNS_TTL:-300}"
-HETZNER_DNS_API="https://api.hcloud.com/v1/dns"
+HETZNER_DNS_API="https://api.hetzner.cloud/v1/dns"
 
 # ── Step 1: Discover or accept the LoadBalancer IP ────────────────────────────
 log "Step 1: Resolving Caddy LoadBalancer IP"
@@ -67,7 +67,7 @@ else
 
   while [[ $(date +%s) -lt ${local_deadline} ]]; do
     LB_IP=$(kubectl get svc caddy-ingress \
-      -n caddy \
+      -n caddy-ingress \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
 
     if [[ -n "${LB_IP}" ]]; then
@@ -80,7 +80,7 @@ else
 
   if [[ -z "${LB_IP}" ]]; then
     err "Caddy LoadBalancer IP not assigned after ${local_timeout}s"
-    err "Check: kubectl get svc caddy-ingress -n caddy"
+    err "Check: kubectl get svc caddy-ingress -n caddy-ingress"
     err "Or set LB_IP=<ip> and re-run this script."
     exit 1
   fi

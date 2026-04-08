@@ -31,16 +31,17 @@ metadata:
 spec:
   instances: 3
 
-  # TimescaleDB HA image — includes CNPG tooling + TimescaleDB 2.x on PostgreSQL 16.
-  # Mirror of docker.io/timescale/timescaledb-ha via mirror.gcr.io (Docker Hub mirror).
-  imageName: mirror.gcr.io/timescale/timescaledb-ha:pg16-all
+  # Standard CNPG PostgreSQL 16 image (ghcr.io).
+  # TimescaleDB requires a custom CNPG-based image due to CNPG's semver tag validation.
+  # To add TimescaleDB: build FROM ghcr.io/cloudnative-pg/postgresql:16 with timescaledb.
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
 
   bootstrap:
     initdb:
       # Runs against template1 so every new tenant database inherits these extensions.
       postInitTemplateSQL:
         # Time-series
-        - CREATE EXTENSION IF NOT EXISTS timescaledb
+        # - CREATE EXTENSION IF NOT EXISTS timescaledb  # requires custom TimescaleDB image
         # Search
         - CREATE EXTENSION IF NOT EXISTS pg_trgm
         - CREATE EXTENSION IF NOT EXISTS unaccent
@@ -75,13 +76,13 @@ spec:
 
   postgresql:
     shared_preload_libraries:
-      - timescaledb
+      # - timescaledb  # requires custom TimescaleDB image
     parameters:
       max_connections: "600"
       shared_buffers: "256MB"
       default_toast_compression: "lz4"
       # timescaledb.telemetry_level=off disables phone-home telemetry
-      timescaledb.telemetry_level: "off"
+      # timescaledb.telemetry_level: "off"  # requires custom TimescaleDB image
 
   backup:
     retentionPolicy: "30d"
