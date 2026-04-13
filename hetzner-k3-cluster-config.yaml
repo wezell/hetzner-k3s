@@ -33,23 +33,26 @@ masters_pool:
 
 worker_node_pools:
 - name: medium
-  instance_type: ccx13
+  instance_type: cpx31
   location: ash
   autoscaling:
     enabled: true
     min_instances: 0
     max_instances: 10
 
+# Upgrade to CCX dedicated once Hetzner dedicated core limit is increased:
+# - name: large   → ccx33 (8 dedicated, 32GB)
+# - name: x-large → ccx43 (16 dedicated, 64GB)
 - name: large
-  instance_type: ccx33
+  instance_type: cpx41
   location: ash
   autoscaling:
     enabled: true
-    min_instances: 1
+    min_instances: 0
     max_instances: 10
 
 - name: x-large
-  instance_type: ccx43
+  instance_type: cpx51
   location: ash
   autoscaling:
     enabled: true
