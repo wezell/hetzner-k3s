@@ -24,7 +24,7 @@ networking:
     cilium_egress_gateway: true
 
 masters_pool:
-  instance_type: cpx21
+  instance_type: ccx13
   instance_count: 3
   locations:
     - ash
@@ -33,7 +33,7 @@ masters_pool:
 
 worker_node_pools:
 - name: medium
-  instance_type: cpx31
+  instance_type: ccx13
   location: ash
   autoscaling:
     enabled: true
@@ -41,7 +41,7 @@ worker_node_pools:
     max_instances: 10
 
 - name: large
-  instance_type: cpx41
+  instance_type: ccx33
   location: ash
   autoscaling:
     enabled: true
@@ -49,7 +49,7 @@ worker_node_pools:
     max_instances: 10
 
 - name: x-large
-  instance_type: cpx51
+  instance_type: ccx43
   location: ash
   autoscaling:
     enabled: true
