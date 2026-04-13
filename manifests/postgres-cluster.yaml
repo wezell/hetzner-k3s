@@ -34,7 +34,9 @@ spec:
   # Standard CNPG PostgreSQL 16 image (ghcr.io).
   # TimescaleDB requires a custom CNPG-based image due to CNPG's semver tag validation.
   # To add TimescaleDB: build FROM ghcr.io/cloudnative-pg/postgresql:16 with timescaledb.
-  imageName: ghcr.io/cloudnative-pg/postgresql:18
+  # Custom image: CNPG PostgreSQL 18 + pgvector + pgvectorscale
+  # Build with: source .env && ./scripts/build-postgres.sh --push
+  imageName: dotcms/cnpg-postgresql:18
 
   bootstrap:
     initdb:
