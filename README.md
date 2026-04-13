@@ -169,8 +169,31 @@ customer.com  ──CNAME──▶  acme-prod.botcms.cloud  ──A──▶  LB
 
 - One database per environment (`TENANT-ENV`)
 - Shared 3-node CNPG cluster in `postgres` namespace
-- Backups to Wasabi S3 via Barman (daily, 30-day retention)
+- Image: `dotcms/cnpg-postgresql:18` — custom build on PG 18 with pgvector + pgvectorscale
+- Backups: continuous WAL archiving + daily base backup to Wasabi S3, 30-day retention
 - Endpoints: `postgres-rw.postgres.svc.cluster.local:5432`
+
+**Extensions (pre-installed in `template1`, inherited by all tenant DBs):**
+
+| Extension | Purpose |
+|---|---|
+| `pg_trgm` | Trigram fuzzy/partial text search |
+| `unaccent` | Strip accents for multilingual search |
+| `citext` | Case-insensitive text type |
+| `pgcrypto` | UUID generation, hashing |
+| `btree_gin` | GIN indexes on scalar types |
+| `btree_gist` | GiST indexes on scalar types |
+| `intarray` | Fast integer array operations |
+| `pg_stat_statements` | Query statistics and monitoring |
+| `vector` | pgvector — vector similarity search |
+| `diskann` | pgvectorscale — DiskANN index for large-scale vector search |
+
+**PostgreSQL parameters:** `max_connections=600`, `shared_buffers=256MB`, `default_toast_compression=lz4`
+
+**Rebuild the image** (after updating extensions or PG version):
+```bash
+POSTGRES_IMAGE=dotcms/cnpg-postgresql:18 ./scripts/build-postgres.sh --push
+```
 
 ## OpenSearch
 
