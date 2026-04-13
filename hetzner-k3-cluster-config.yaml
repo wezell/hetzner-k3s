@@ -41,7 +41,7 @@ worker_node_pools:
     max_instances: 10
 
 - name: large
-  instance_type: ccx33
+  instance_type: ccx43
   location: ash
   autoscaling:
     enabled: true
@@ -49,11 +49,11 @@ worker_node_pools:
     max_instances: 10
 
 - name: x-large
-  instance_type: ccx43
+  instance_type: ccx53
   location: ash
   autoscaling:
     enabled: true
-    min_instances: 1
+    min_instances: 0
     max_instances: 10
 
 addons:
