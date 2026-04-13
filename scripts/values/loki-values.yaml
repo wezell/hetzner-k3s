@@ -74,6 +74,13 @@ read:
 write:
   replicas: 0
 
+# Disable optional Memcached caches — reduces resource footprint on small clusters.
+# Loki functions correctly without these; they only improve query latency at scale.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
 promtail:
   enabled: true
   config:
