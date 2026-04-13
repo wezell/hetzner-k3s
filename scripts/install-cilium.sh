@@ -64,7 +64,8 @@ log "Installing Cilium ${CILIUM_VERSION}"
 log "  API server:          ${API_HOST}:6443"
 log "  Pod CIDR:            ${POD_CIDR}"
 log "  Native routing CIDR: ${NATIVE_ROUTING_CIDR}"
-log "  Mode: native routing — Hetzner cloud routes forward pod traffic between nodes"
+log "  Mode:   native routing + BPF masquerade + egress gateway"
+log "  Note:   autoDirectNodeRoutes=false — Hetzner SDN routes handle inter-node pod traffic"
 
 # ── Helm install ──────────────────────────────────────────────────────────────
 # Native routing without autoDirectNodeRoutes — Hetzner's private network already
@@ -80,10 +81,16 @@ helm upgrade --install cilium cilium/cilium \
   --set autoDirectNodeRoutes=false \
   --set ipv4NativeRoutingCIDR="${NATIVE_ROUTING_CIDR}" \
   --set ipam.mode=kubernetes \
+  --set "k8s.requireIPv4PodCIDR=true" \
   --set ipam.operator.clusterPoolIPv4PodCIDRList="${POD_CIDR}" \
   --set kubeProxyReplacement=true \
   --set k8sServiceHost="${API_HOST}" \
   --set k8sServicePort=6443 \
+  --set endpointRoutes.enabled=true \
+  --set loadBalancer.acceleration=native \
+  --set bpf.masquerade=true \
+  --set egressGateway.enabled=true \
+  --set MTU=1450 \
   --set hubble.relay.enabled=true \
   --set hubble.ui.enabled=true \
   --set operator.replicas=1
