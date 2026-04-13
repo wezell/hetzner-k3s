@@ -16,7 +16,7 @@ set -euo pipefail
 KUBECONFIG="${KUBECONFIG:-$(dirname "$0")/../kubeconfig}"
 export KUBECONFIG
 
-CILIUM_VERSION="${CILIUM_VERSION:-1.15.6}"
+CILIUM_VERSION="${CILIUM_VERSION:-1.17.2}"
 POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
 NATIVE_ROUTING_CIDR="${NATIVE_ROUTING_CIDR:-10.0.0.0/8}"  # covers pods + nodes
 
@@ -26,17 +26,21 @@ warn() { echo -e "${YELLOW}WARN:${NC} $*"; }
 err()  { echo -e "${RED}ERROR:${NC} $*" >&2; }
 
 # ── Already installed? ────────────────────────────────────────────────────────
+# hetzner-k3s pre-installs Cilium (typically with VXLAN/tunnel routing).
+# Always run helm upgrade to ensure our native routing config is applied.
+# --reuse-values preserves any hetzner-k3s-specific settings we don't override.
 if kubectl get daemonset cilium -n kube-system &>/dev/null 2>&1; then
-  READY=$(kubectl get daemonset cilium -n kube-system \
-    -o jsonpath='{.status.numberReady}' 2>/dev/null || echo 0)
-  DESIRED=$(kubectl get daemonset cilium -n kube-system \
-    -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo 0)
-  if [[ "${READY}" -eq "${DESIRED}" && "${DESIRED}" -gt 0 ]]; then
-    log "Cilium already installed and healthy (${READY}/${DESIRED} ready) — skipping"
+  CURRENT_MODE=$(kubectl exec -n kube-system ds/cilium -c cilium-agent \
+    -- cilium status 2>/dev/null | grep "^Routing:" | awk '{print $3}' || echo "unknown")
+  if [[ "${CURRENT_MODE}" == "Native" ]]; then
+    READY=$(kubectl get daemonset cilium -n kube-system \
+      -o jsonpath='{.status.numberReady}' 2>/dev/null || echo 0)
+    DESIRED=$(kubectl get daemonset cilium -n kube-system \
+      -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo 0)
+    log "Cilium already in native routing mode (${READY}/${DESIRED} ready) — skipping"
     exit 0
   fi
-  warn "Cilium DaemonSet found but not fully ready (${READY}/${DESIRED}) — re-installing"
-  helm uninstall cilium -n kube-system --wait --timeout 2m 2>/dev/null || true
+  warn "Cilium found in non-native mode (${CURRENT_MODE}) — upgrading to native routing"
 fi
 
 # ── Resolve API server internal IP ───────────────────────────────────────────
@@ -72,9 +76,14 @@ log "  Note:   autoDirectNodeRoutes=false — Hetzner SDN routes handle inter-no
 # has routes for each node's pod CIDR (added by hetzner-k3s on cluster creation).
 # Pod traffic flows: pod → kernel default route → Hetzner gateway 10.0.0.1
 # → Hetzner network route → destination node. No tunneling overhead.
+# Use the already-installed chart version if present (hetzner-k3s may install newer)
+INSTALLED_VERSION=$(helm list -n kube-system 2>/dev/null | awk '/^cilium/{print $9}' | sed 's/cilium-//')
+[[ -n "${INSTALLED_VERSION}" ]] && CILIUM_VERSION="${INSTALLED_VERSION}"
+
 helm upgrade --install cilium cilium/cilium \
   --version "${CILIUM_VERSION}" \
   --namespace kube-system \
+  --reuse-values \
   --wait \
   --timeout 5m \
   --set routingMode=native \
