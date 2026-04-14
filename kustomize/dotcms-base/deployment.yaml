@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dotcms  # overlays patch this to INSTANCE
+  labels:
+    app.kubernetes.io/name: dotcms
+spec:
+  replicas: 1
+  minReadySeconds: 30
+  selector:
+    matchLabels:
+      app: dotcms
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: dotcms
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: dotcms
+          image: dotcms/dotcms:latest  # overlays set this via images: directive
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              memory: "3Gi"
+          env:
+            # --- JVM ---
+            - name: JAVA_OPTS_MEMORY
+              value: "-XX:MaxRAMPercentage=66"
+            - name: CMS_JAVA_OPTS
+              value: "-Dlog4j2.formatMsgNoLookups=true -XX:+UseG1GC -XX:-UseZGC"
+            # --- TLS terminated by Caddy ---
+            - name: CMS_DISABLE_APR_SSL
+              value: "true"
+            - name: CMS_SSL_ENABLED
+              value: "false"
+            # --- Cluster identity (patched per overlay to INSTANCE) ---
+            - name: DOT_DOTCMS_CLUSTER_ID
+              value: dotcms
+            # --- Database (patched per overlay) ---
+            - name: DB_BASE_URL
+              value: "jdbc:postgresql://postgres-rw.postgres.svc.cluster.local:5432/dotcms"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: dotcms-postgres  # patched to INSTANCE-postgres
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dotcms-postgres
+                  key: password
+            - name: DOT_DB_MAX_TOTAL
+              value: "10"
+            - name: DOT_DB_MAX_IDLE
+              value: "5"
+            # --- OpenSearch ---
+            - name: DOT_ES_ENDPOINTS
+              value: "https://opensearch.opensearch.svc.cluster.local:9200"
+            - name: DOT_ES_AUTH_TYPE
+              value: BASIC
+            - name: DOT_ES_AUTH_BASIC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: dotcms-os-creds  # patched to INSTANCE-os-creds
+                  key: username
+            - name: DOT_ES_AUTH_BASIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dotcms-os-creds
+                  key: password
+            # --- Security ---
+            - name: DOT_REMOTE_CALL_SUBNET_BLACKLIST
+              value: "169.254.169.254/32,127.0.0.1/32,172.16.0.0/12,192.168.0.0/16"
+            - name: DOT_SYSTEM_STATUS_API_IP_ACL
+              value: "0.0.0.0/0"
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8082
+              name: https
+          volumeMounts:
+            - name: assets
+              mountPath: /data/shared
+            - name: ssl-certs
+              mountPath: /data/shared/assets/certs
+          startupProbe:
+            httpGet:
+              path: /api/v1/probes/heavy
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 60
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/probes/light
+              port: 8082
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/v1/probes/light
+              port: 8082
+            periodSeconds: 15
+            failureThreshold: 6
+            timeoutSeconds: 10
+      volumes:
+        - name: assets
+          persistentVolumeClaim:
+            claimName: dotcms-assets  # patched to INSTANCE-assets
+        - name: ssl-certs
+          emptyDir: {}
+      tolerations:
+        - key: "node.kubernetes.io/server-usage"
+          operator: Equal
+          value: "dotcms"
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/server-usage
+                    operator: In
+                    values: [dotcms]
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [dotcms]
+              topologyKey: kubernetes.io/hostname

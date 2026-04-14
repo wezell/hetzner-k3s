@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - services.yaml
+  - hpa.yaml
+  - pdb.yaml
+
+# Base labels applied to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: hetzner-k3s
+  app.kubernetes.io/component: dotcms
