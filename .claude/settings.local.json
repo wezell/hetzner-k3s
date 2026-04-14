@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "mcp__plugin_ouroboros_ouroboros__ouroboros_session_status",
-      "mcp__plugin_ouroboros_ouroboros__ouroboros_job_status"
+      "mcp__plugin_ouroboros_ouroboros__ouroboros_job_status",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(chmod +x:*)",
+      "Bash(POSTGRES_IMAGE=dotcms/cnpg-postgresql:18 ./scripts/build-postgres.sh --push)",
+      "Bash(docker buildx:*)"
     ]
   }
 }

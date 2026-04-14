@@ -111,7 +111,7 @@ spec:
 
             # --- OpenSearch (cluster-wide, per-tenant user) ---
             - name: DOT_ES_ENDPOINTS
-              value: "https://opensearch-cluster-master.opensearch.svc.cluster.local:9200"
+              value: "https://opensearch.opensearch.svc.cluster.local:9200"
             - name: DOT_ES_AUTH_TYPE
               value: BASIC
             - name: DOT_ES_AUTH_BASIC_USER
