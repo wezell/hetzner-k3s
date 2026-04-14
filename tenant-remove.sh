@@ -144,12 +144,11 @@ deprovision_instance() {
 
   log "Dropping Postgres database and role: ${instance}"
   if kubectl get pod postgres-1 -n postgres &>/dev/null; then
-    run kubectl exec -n postgres postgres-1 -- psql -U postgres <<SQL 2>/dev/null || \
-      warn "Postgres cleanup for ${instance} failed — may already be gone"
-REVOKE ALL PRIVILEGES ON DATABASE "${instance}" FROM "${instance}";
-DROP DATABASE IF EXISTS "${instance}";
-DROP ROLE IF EXISTS "${instance}";
-SQL
+    run kubectl exec -n postgres postgres-1 -- psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${instance}' AND pid <> pg_backend_pid();" 2>/dev/null || true
+    run kubectl exec -n postgres postgres-1 -- psql -U postgres -c "DROP DATABASE IF EXISTS \"${instance}\";" 2>/dev/null || \
+      warn "DROP DATABASE ${instance} failed — may already be gone"
+    run kubectl exec -n postgres postgres-1 -- psql -U postgres -c "DROP ROLE IF EXISTS \"${instance}\";" 2>/dev/null || \
+      warn "DROP ROLE ${instance} failed — may already be gone"
   else
     warn "Shared CNPG primary pod 'postgres-1' not found — skipping Postgres SQL cleanup for ${instance}"
   fi
@@ -169,7 +168,7 @@ SQL
     trap "kill ${os_pf_pid} 2>/dev/null || true; rm -f /tmp/os-pf-remove-${instance}.log" RETURN
 
     local _w=0
-    until curl -sf -o /dev/null "http://127.0.0.1:${os_local_port}" \
+    until curl -sfk -o /dev/null "https://127.0.0.1:${os_local_port}" \
         -u "${OPENSEARCH_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" --max-time 2 2>/dev/null; do
       sleep 1; _w=$((_w+1))
       [[ ${_w} -ge 10 ]] && { warn "OpenSearch not reachable — skipping OS cleanup for ${instance}"; break; }
@@ -182,9 +181,9 @@ SQL
       "_plugins/_security/api/actiongroups/${instance}-cluster" \
       "_plugins/_security/api/actiongroups/${instance}-index" \
       "_plugins/_security/api/actiongroups/${instance}-all-indices"; do
-      run curl -sf -X DELETE \
+      run curl -sfk -X DELETE \
         -u "${OPENSEARCH_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" \
-        "http://127.0.0.1:${os_local_port}/${resource}" \
+        "https://127.0.0.1:${os_local_port}/${resource}" \
         --max-time 10 2>/dev/null || true
     done
 

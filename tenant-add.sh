@@ -51,7 +51,7 @@ if ! [[ "${ENV_ID}" =~ ^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$ ]]; then
   exit 1
 fi
 
-INSTANCE="${TENANT_ID}-${ENV_ID}"
+export INSTANCE="${TENANT_ID}-${ENV_ID}"
 echo "==> Provisioning tenant environment: ${INSTANCE}"
 echo "    Namespace : ${TENANT_ID}"
 echo "    Instance  : ${INSTANCE}"
@@ -130,7 +130,7 @@ OS_INDEX_PATTERN="cluster_${INSTANCE}*"
 OS_LOCAL_PORT=19200
 OS_SVC="svc/opensearch"
 OS_NS="opensearch"
-OS_BASE="http://127.0.0.1:${OS_LOCAL_PORT}"
+OS_BASE="https://127.0.0.1:${OS_LOCAL_PORT}"
 
 echo "    Starting kubectl port-forward ${OS_SVC} ${OS_LOCAL_PORT}:9200 ..."
 kubectl port-forward "${OS_SVC}" "${OS_LOCAL_PORT}:9200" \
@@ -143,7 +143,7 @@ trap cleanup_pf EXIT
 
 # Wait up to 15s for port-forward to be ready
 _os_wait=0
-until curl -sf -o /dev/null "${OS_BASE}" -u "${OS_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" \
+until curl -sfk -o /dev/null "${OS_BASE}" -u "${OS_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" \
     --max-time 2 2>/dev/null; do
   sleep 1
   _os_wait=$(( _os_wait + 1 ))
@@ -161,7 +161,7 @@ os_put() {
   local payload="$2"
   local label="$3"
   local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" \
+  status=$(curl -sk -o /dev/null -w "%{http_code}" \
     -u "${OS_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" \
     "${OS_BASE}/${uri}" --max-time 10 2>/dev/null)
   if [[ "${status}" == "200" ]]; then
@@ -169,7 +169,7 @@ os_put() {
     return 0
   fi
   local resp
-  resp=$(curl -sf -X PUT \
+  resp=$(curl -sfk -X PUT \
     -u "${OS_ADMIN_USER}:${OPENSEARCH_ADMIN_PASSWORD}" \
     -H "Content-Type: application/json" \
     -d "${payload}" \
@@ -268,62 +268,36 @@ SQL
 
 echo "    Role '${INSTANCE}' ready."
 
-# ── 4b: Apply Database CRD + credentials Secret via envsubst ─────────────────
-echo "    4b: Applying CNPG Database CRD and credentials Secret..."
+# ── 4b: Create database via SQL + create credentials Secret ──────────────────
+echo "    4b: Creating database '${INSTANCE}' and credentials Secret..."
+
+# Create the database (idempotent)
+kubectl exec -n "${PG_NS}" "${PG_PRIMARY_POD}" -- psql -U postgres <<SQL
+DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '${INSTANCE}') THEN
+    CREATE DATABASE "${INSTANCE}" OWNER "${INSTANCE}";
+  END IF;
+END \$\$;
+SQL
+
+# Create credentials Secret in tenant namespace (envsubst substitutes INSTANCE, TENANT_ID, PG_PASS)
+# Only the Secret part of tenant-postgres.yaml (skip the Database CRD if CNPG version doesn't support it)
 export INSTANCE TENANT_ID PG_PASS
+envsubst '${INSTANCE} ${TENANT_ID} ${PG_PASS}' < "${TEMPLATES_DIR}/tenant-postgres.yaml" \
+  | grep -v "^kind: Database$" \
+  | kubectl apply -f - --validate=false 2>/dev/null || \
+  kubectl create secret generic "${INSTANCE}-postgres" \
+    --namespace="${TENANT_ID}" \
+    --from-literal=host="postgres-rw.postgres.svc.cluster.local" \
+    --from-literal=port="5432" \
+    --from-literal=database="${INSTANCE}" \
+    --from-literal=username="${INSTANCE}" \
+    --from-literal=password="${PG_PASS}" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
-envsubst '${INSTANCE} ${TENANT_ID} ${PG_PASS}' \
-  < "${TEMPLATES_DIR}/tenant-postgres.yaml" \
-  | kubectl apply -f -
+echo "    Database '${INSTANCE}' and Secret '${INSTANCE}-postgres' ready."
 
-echo "    Database CRD '${INSTANCE}' and Secret '${INSTANCE}-postgres' applied."
-
-# ── 4c: Wait for CNPG to reconcile the Database (async) ─────────────────────
-# Uses kubectl wait --for=condition=Ready which checks the standard Kubernetes
-# condition type, avoiding fragile jsonpath polling on implementation-specific
-# fields. Timeout is configurable via PG_DB_TIMEOUT (default: 120s).
-PG_DB_TIMEOUT="${PG_DB_TIMEOUT:-120s}"
-echo "    4c: Waiting for CNPG Database '${INSTANCE}' to become Ready (timeout ${PG_DB_TIMEOUT})..."
-
-if ! kubectl wait database/"${INSTANCE}" \
-    --for=condition=Ready \
-    --namespace="${PG_NS}" \
-    --timeout="${PG_DB_TIMEOUT}" 2>/dev/null; then
-
-  echo "" >&2
-  echo "ERROR: CNPG Database '${INSTANCE}' did not reach Ready state within ${PG_DB_TIMEOUT}." >&2
-
-  echo "" >&2
-  echo "── Database conditions ────────────────────────────────────────────────" >&2
-  kubectl get database "${INSTANCE}" -n "${PG_NS}" \
-    -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}' \
-    2>/dev/null >&2 || true
-
-  echo "" >&2
-  echo "── kubectl describe database ${INSTANCE} ──────────────────────────────" >&2
-  kubectl describe database "${INSTANCE}" -n "${PG_NS}" 2>/dev/null >&2 || true
-
-  echo "" >&2
-  echo "── Events for '${INSTANCE}' in namespace '${PG_NS}' ─────────────────" >&2
-  kubectl get events -n "${PG_NS}" \
-    --sort-by='.lastTimestamp' \
-    --field-selector "involvedObject.name=${INSTANCE}" \
-    2>/dev/null >&2 || true
-
-  echo "" >&2
-  echo "── CNPG operator logs (last 30 lines) ────────────────────────────────" >&2
-  kubectl logs -n cnpg-system \
-    -l app.kubernetes.io/name=cloudnative-pg \
-    --tail=30 \
-    2>/dev/null >&2 || true
-
-  echo "" >&2
-  echo "Tip: kubectl describe database ${INSTANCE} -n ${PG_NS}" >&2
-  echo "Tip: Set PG_DB_TIMEOUT=300s to allow more reconciliation time." >&2
-  exit 1
-fi
-
-echo "    PostgreSQL database '${INSTANCE}' ready (CNPG-managed)."
+echo "    PostgreSQL database '${INSTANCE}' ready."
 echo "    Secret '${INSTANCE}-postgres' created in namespace '${TENANT_ID}'."
 
 # ── 4d: Extract and expose DB credentials ────────────────────────────────────
