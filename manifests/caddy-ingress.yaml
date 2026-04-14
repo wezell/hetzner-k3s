@@ -65,19 +65,12 @@ data:
         email ${ACME_EMAIL}
     }
 
-    # Internal dashboards — Caddy-managed ACME TLS (named vhosts get certs automatically).
-    # BasicAuth credentials sourced from caddy-admin-auth Secret injected as env vars.
+    # Internal dashboards — auth handled by the app itself (Grafana, Headlamp).
     observe.${BASE_DOMAIN} {
-        basicauth {
-            {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
-        }
         reverse_proxy kube-prometheus-stack-grafana.monitoring.svc.cluster.local:80
     }
 
     manage.${BASE_DOMAIN} {
-        basicauth {
-            {$CADDY_ADMIN_USER} {$CADDY_ADMIN_HASH}
-        }
         reverse_proxy headlamp.headlamp.svc.cluster.local:80
     }
 
