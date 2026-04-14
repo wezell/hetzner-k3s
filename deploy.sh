@@ -24,7 +24,6 @@
 #   CADDY_ADMIN_DOMAIN    — FQDN for Caddy admin API (e.g. caddy-admin.botcms.cloud)
 #   GRAFANA_ADMIN_PASSWORD — Grafana admin password (exposed at observe.BASE_DOMAIN)
 #   HCLOUD_TOKEN          — Hetzner Cloud token (for cloud controller secret)
-#   HETZNER_DNS_TOKEN     — Hetzner DNS API token (for wildcard DNS record, phase 6)
 #
 # Prerequisites: kubectl, helm, envsubst (gettext), curl
 
@@ -101,7 +100,6 @@ REQUIRED_VARS=(
   CADDY_ADMIN_PASSWORD
   GRAFANA_ADMIN_PASSWORD
   HCLOUD_TOKEN
-  HETZNER_DNS_TOKEN
 )
 
 missing=()
