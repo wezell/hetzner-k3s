@@ -59,7 +59,7 @@ Phases:
   1  Helm repos          — add/update all chart repositories
   2  Namespaces          — create cluster-level namespaces
   3  Cilium CNI          — verify/install Cilium and wait for CNI readiness
-  4  cert-manager        — CRD + webhook TLS for cluster operators (not used for tenant certs)
+  # Phase 4 (cert-manager) removed — Caddy handles all TLS directly via ACME
   5  Caddy ingress       — on-demand TLS via cname_router plugin
   6  Wildcard DNS        — *.BASE_DOMAIN A record → Caddy LB IP via Hetzner DNS API
   7  CNPG operator       — CloudNativePG for shared Postgres clusters
@@ -175,7 +175,6 @@ run_phase() {
 
 # ── Phase 1: Helm repos ───────────────────────────────────────────────────────
 phase_helm_repos() {
-  helm repo add cert-manager https://charts.jetstack.io                                  2>/dev/null || true
   helm repo add cilium       https://helm.cilium.io                                      2>/dev/null || true
   helm repo add caddy        https://caddyserver.github.io/ingress                       2>/dev/null || true
   helm repo add cnpg         https://cloudnative-pg.github.io/charts                    2>/dev/null || true
@@ -202,68 +201,11 @@ phase_cilium() {
   "${SCRIPT_DIR}/scripts/install-cilium.sh"
 }
 
-# ── Phase 4: cert-manager ─────────────────────────────────────────────────────
-phase_cert_manager() {
-  "${SCRIPT_DIR}/scripts/install-cert-manager.sh"
-}
+# ── Phase 4 removed (cert-manager) — Caddy handles all TLS via ACME ──────────
 
-# ── Phase 5: Caddy ingress + ClusterIssuers ───────────────────────────────────
+# ── Phase 5: Caddy ingress ────────────────────────────────────────────────────
 phase_caddy() {
   "${SCRIPT_DIR}/scripts/install-caddy.sh"
-  apply_cluster_issuers
-}
-
-# Apply Let's Encrypt ClusterIssuers and block until letsencrypt-botcms is Ready.
-# cert-manager must be installed (phase 4) before this runs.
-apply_cluster_issuers() {
-  local manifest="${MANIFESTS_DIR}/cluster-issuer.yaml"
-  local issuer_name="letsencrypt-botcms"
-  local timeout=120  # seconds — account registration is fast once LE is reachable
-
-  log "Applying Let's Encrypt ClusterIssuers (${BASE_DOMAIN:-botcms.cloud})..."
-
-  if [[ ! -f "${manifest}" ]]; then
-    err "ClusterIssuer manifest not found: ${manifest}"
-    exit 1
-  fi
-
-  # Substitute ACME_EMAIL and BASE_DOMAIN before applying
-  envsubst '${ACME_EMAIL} ${BASE_DOMAIN}' < "${manifest}" | kubectl apply -f -
-  info "ClusterIssuer manifests applied"
-
-  # ── Wait for letsencrypt-botcms to reach Ready=True ─────────────────────────
-  # The Ready condition is set once cert-manager registers the ACME account key
-  # with Let's Encrypt. This does NOT require solving a challenge.
-  log "Waiting for ClusterIssuer '${issuer_name}' to reach Ready=True (timeout: ${timeout}s)..."
-
-  local deadline=$(( $(date +%s) + timeout ))
-  local ready=false
-
-  while [[ $(date +%s) -lt ${deadline} ]]; do
-    local status
-    status=$(kubectl get clusterissuer "${issuer_name}" \
-      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-
-    if [[ "${status}" == "True" ]]; then
-      ready=true
-      break
-    fi
-
-    local reason
-    reason=$(kubectl get clusterissuer "${issuer_name}" \
-      -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "pending")
-    info "ClusterIssuer status: ${reason:-waiting} — retrying in 10s..."
-    sleep 10
-  done
-
-  if [[ "${ready}" != "true" ]]; then
-    err "ClusterIssuer '${issuer_name}' did not reach Ready=True within ${timeout}s"
-    kubectl describe clusterissuer "${issuer_name}" 2>/dev/null || true
-    exit 1
-  fi
-
-  info "ClusterIssuer '${issuer_name}' is Ready"
-  info "ClusterIssuer 'letsencrypt-staging' applied (status not gated)"
 }
 
 # ── Phase 6: Wildcard DNS ─────────────────────────────────────────────────────
@@ -328,7 +270,7 @@ fi
 run_phase 1  "Helm repos"          phase_helm_repos
 run_phase 2  "Namespaces"          phase_namespaces
 run_phase 3  "Cilium CNI"          phase_cilium
-run_phase 4  "cert-manager"        phase_cert_manager
+## Phase 4 (cert-manager) removed — Caddy handles all TLS via ACME
 run_phase 5  "Caddy ingress"       phase_caddy
 run_phase 6  "Wildcard DNS"        phase_dns
 run_phase 7  "CNPG operator"       phase_cnpg
