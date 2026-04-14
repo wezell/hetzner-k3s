@@ -222,6 +222,14 @@ metadata:
     # Hetzner Cloud LB placement — ash region matches cluster nodes
     load-balancer.hetzner.cloud/location: ash
     load-balancer.hetzner.cloud/name: caddy-ingress
+    # HTTP health check on /health (Caddy responds 200) so only nodes with
+    # a running Caddy pod are marked healthy — prevents LB routing to dead backends
+    load-balancer.hetzner.cloud/health-check-protocol: http
+    load-balancer.hetzner.cloud/health-check-port: "80"
+    load-balancer.hetzner.cloud/health-check-http-path: /health
+    load-balancer.hetzner.cloud/health-check-interval: 10s
+    load-balancer.hetzner.cloud/health-check-timeout: 5s
+    load-balancer.hetzner.cloud/health-check-retries: "3"
 spec:
   type: LoadBalancer
   selector:
