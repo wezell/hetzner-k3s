@@ -10,7 +10,7 @@
 #   source .env && LB_IP=1.2.3.4 ./scripts/configure-dns.sh   # skip auto-discovery
 #
 # Required env vars (from .env):
-#   HETZNER_DNS_TOKEN  — Hetzner DNS API token (from dns.hetzner.com, separate from HCLOUD_TOKEN)
+#   HCLOUD_TOKEN  — Hetzner Cloud API token (same token used for compute)
 #   BASE_DOMAIN   — apex domain, e.g. botcms.cloud
 #   KUBECONFIG    — path to kubeconfig for LB IP discovery
 #
@@ -31,7 +31,7 @@ err()  { echo -e "${RED}ERROR:${NC} $*" >&2; }
 info() { echo "    $*"; }
 
 # ── Validate required variables ───────────────────────────────────────────────
-REQUIRED_VARS=(HETZNER_DNS_TOKEN BASE_DOMAIN)
+REQUIRED_VARS=(HCLOUD_TOKEN BASE_DOMAIN)
 missing=()
 for var in "${REQUIRED_VARS[@]}"; do
   [[ -z "${!var:-}" ]] && missing+=("$var")
@@ -43,7 +43,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 DNS_TTL="${DNS_TTL:-300}"
-HETZNER_DNS_API="https://dns.hetzner.com/api/v1"
+HETZNER_DNS_API="https://api.hetzner.cloud/v1/dns"
 
 # ── Step 1: Discover or accept the LoadBalancer IP ────────────────────────────
 log "Step 1: Resolving Caddy LoadBalancer IP"
@@ -92,7 +92,7 @@ info "LoadBalancer IP: ${LB_IP}"
 log "Step 2: Looking up Hetzner DNS zone for '${BASE_DOMAIN}'"
 
 zone_response=$(curl -sf \
-  -H "Auth-API-Token: ${HETZNER_DNS_TOKEN}" \
+  -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
   "${HETZNER_DNS_API}/zones?name=${BASE_DOMAIN}" 2>/dev/null)
 
 ZONE_ID=$(echo "${zone_response}" | \
@@ -101,7 +101,7 @@ ZONE_ID=$(echo "${zone_response}" | \
 
 if [[ -z "${ZONE_ID}" ]]; then
   err "DNS zone '${BASE_DOMAIN}' not found in Hetzner DNS."
-  err "Create the zone at https://dns.hetzner.com and ensure HETZNER_DNS_TOKEN is correct."
+  err "Create the zone at https://dns.hetzner.com and ensure HCLOUD_TOKEN is correct."
   err "API response: ${zone_response}"
   exit 1
 fi
@@ -112,7 +112,7 @@ info "Zone ID: ${ZONE_ID}"
 log "Step 3: Checking for existing '*.${BASE_DOMAIN}' A record"
 
 records_response=$(curl -sf \
-  -H "Auth-API-Token: ${HETZNER_DNS_TOKEN}" \
+  -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
   "${HETZNER_DNS_API}/records?zone_id=${ZONE_ID}" 2>/dev/null)
 
 RECORD_ID=$(echo "${records_response}" | \
@@ -142,7 +142,7 @@ if [[ -n "${RECORD_ID}" ]]; then
   log "Step 4: Updating existing wildcard A record (was: ${EXISTING_VALUE} → ${LB_IP})"
 
   update_response=$(curl -sf -X PUT \
-    -H "Auth-API-Token: ${HETZNER_DNS_TOKEN}" \
+    -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{
       \"value\": \"${LB_IP}\",
@@ -169,7 +169,7 @@ else
   log "Step 4: Creating wildcard A record *.${BASE_DOMAIN} → ${LB_IP}"
 
   create_response=$(curl -sf -X POST \
-    -H "Auth-API-Token: ${HETZNER_DNS_TOKEN}" \
+    -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{
       \"value\": \"${LB_IP}\",
