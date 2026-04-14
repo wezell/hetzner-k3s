@@ -150,6 +150,31 @@ source .env && ./tenant-remove.sh --yes
 Drops Postgres DB+role from shared cluster, deletes OpenSearch user/role via
 Security API, removes static PV, and cascades namespace deletion.
 
+## Kustomize — Tenant Manifests
+
+dotCMS tenant manifests use Kustomize rather than envsubst. A generator script produces overlays from tenant parameters, enabling future database-driven automation.
+
+```
+kustomize/
+  dotcms-base/          — canonical Deployment, Services, HPA, PDB
+  tenants/INSTANCE/     — per-tenant overlay (names, namespace, secrets, image)
+```
+
+**Generate and apply an overlay:**
+```bash
+TENANT_ID=acme ENV_ID=prod DOTCMS_IMAGE=mirror.gcr.io/dotcms/dotcms:LTS-24.10 \
+  ./scripts/generate-tenant-overlay.sh
+kubectl apply -k kustomize/tenants/acme-prod/
+```
+
+**Override resource sizing:**
+```bash
+CPU_REQUEST=1 MEMORY_REQUEST=4Gi MEMORY_LIMIT=5Gi MIN_REPLICAS=2 MAX_REPLICAS=8 \
+  TENANT_ID=acme ENV_ID=prod ./scripts/generate-tenant-overlay.sh
+```
+
+**Future DB automation path:** read tenant row → call generator → `kubectl apply -k`.
+
 ## Caddy — Ingress & Routing
 
 Runs as a 2-replica HA Deployment. Custom image with `cname_router` and
@@ -239,7 +264,7 @@ Copy `.env.example` → `.env` and fill in values. Source before any script.
 | `CADDY_ADMIN_DOMAIN` | FQDN for Caddy admin API |
 | `CADDY_ADMIN_USER` | BasicAuth user for Grafana/Headlamp via Caddy |
 | `CADDY_ADMIN_PASSWORD` | BasicAuth password (bcrypt-hashed by install-caddy.sh) |
-| `OPENSEARCH_ADMIN_USER` | OpenSearch admin user (default: `admin`) |
+| `OPENSEARCH_ADMIN_USER` | OpenSearch admin user (`dotcms_admin` — the built-in `admin` is read-only in 1.x) |
 | `OPENSEARCH_ADMIN_PASSWORD` | OpenSearch admin password |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
 | `VALKEY_PASSWORD` | Optional Valkey auth password (blank = no auth) |
