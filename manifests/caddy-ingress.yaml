@@ -219,6 +219,7 @@ metadata:
     load-balancer.hetzner.cloud/use-private-ip: "true"
 spec:
   type: LoadBalancer
+  externalTrafficPolicy: Local
   selector:
     app: caddy-ingress
   ports:
