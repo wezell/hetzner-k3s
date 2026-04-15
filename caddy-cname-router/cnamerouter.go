@@ -292,17 +292,31 @@ func fetchCMRoutes(logger *zap.Logger) (map[string]*cmRoute, error) {
 	routes := make(map[string]*cmRoute, len(list.Items))
 	for _, cm := range list.Items {
 		hostname := cm.Data["hostname"]
-		svc := cm.Data["clusterip-svc"]
-		portStr := cm.Data["service-port"]
-		if hostname == "" || svc == "" {
+		if hostname == "" {
 			continue
 		}
+
+		svc := cm.Data["clusterip-svc"]
+		if svc == "" {
+			// Convention: strip "route-" prefix from ConfigMap name to get the
+			// app name, then assume <app>.<app>.svc.cluster.local.
+			// e.g. ConfigMap "route-headlamp" → headlamp.headlamp.svc.cluster.local
+			app := strings.TrimPrefix(cm.Metadata.Name, "route-")
+			if app != "" {
+				svc = app + "." + app + "." + k8sSvcDomain
+			}
+		}
+		if svc == "" {
+			continue
+		}
+
+		portStr := cm.Data["service-port"]
 		port, _ := strconv.Atoi(portStr)
 		if port == 0 {
 			port = 80
 		}
 		routes[hostname] = &cmRoute{
-			hostname:    hostname,
+			hostname:     hostname,
 			clusteripSvc: svc,
 			servicePort:  port,
 		}

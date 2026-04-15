@@ -33,42 +33,24 @@ Hosts isolated dotCMS environments at `TENANT-ENV.botcms.cloud`.
 - `.env` sourced with credentials (see `.env.example`)
 - Wildcard DNS: `*.botcms.cloud` → cluster LB IP
 
-## Quick Start
-
-```bash
-cp .env.example .env
-# Fill in .env
-
-source .env && ./deploy.sh
-
-# Add a tenant environment manually (or via the Control Plane)
-export TENANT_ID=acme ENV_ID=prod
-source .env && ./tenant-add.sh
-
-# Remove a single environment
-source .env && ./tenant-remove.sh --env-only --yes
-
-# Remove entire tenant namespace
-source .env && ./tenant-remove.sh --yes
-```
-
 ## deploy.sh — Infrastructure Phases
 
 ```
 Phase 1   Helm repos
 Phase 2   Namespaces
 Phase 3   Cilium CNI
-Phase 4   Caddy ingress         on-demand TLS via cname_router plugin
-Phase 5   Wildcard DNS          *.botcms.cloud → LB IP
-Phase 6   CNPG operator
-Phase 7   OpenSearch operator
-Phase 8   OpenSearch cluster    shared 3-node cluster
-Phase 9   CSI-S3                Wasabi-backed geesefs storage class
-Phase 10  Postgres cluster      shared CNPG cluster
-Phase 11  Monitoring            Prometheus + Grafana + Loki
-Phase 12  Descheduler
-Phase 13  Valkey                Caddy cert storage
+Phase 5   Caddy ingress         on-demand TLS via cname_router plugin
+Phase 6   Wildcard DNS          *.botcms.cloud → LB IP
+Phase 7   CNPG operator
+Phase 8   OpenSearch operator
+Phase 9   OpenSearch cluster    shared 3-node cluster
+Phase 10  CSI-S3                Wasabi-backed geesefs storage class
+Phase 11  Postgres cluster      shared CNPG cluster
+Phase 12  Monitoring            Prometheus + Grafana + Loki
+Phase 13  Descheduler
+Phase 14  Valkey                Caddy cert storage
 ```
+Note: Phase 4 (cert-manager) was removed — Caddy handles all TLS directly via ACME.
 
 ```bash
 ./deploy.sh --dry-run       # validate prereqs, print plan
@@ -111,7 +93,7 @@ kustomize/
 The Control Plane worker generates overlays automatically when provisioning environments. Manual generation:
 ```bash
 TENANT_ID=acme ENV_ID=prod DOTCMS_IMAGE=mirror.gcr.io/dotcms/dotcms:LTS-24.10 \
-  ./scripts/generate-tenant-overlay.sh
+  ./generate-tenant-overlay.sh
 kubectl apply -k kustomize/tenants/acme-prod/
 ```
 
@@ -136,7 +118,7 @@ See [`control-plane/README.md`](control-plane/README.md) for deployment details.
 ## Monitoring
 
 - Grafana: `https://observe.botcms.cloud`
-- Headlamp: `https://manage.botcms.cloud`
+- Headlamp: `https://manage.botcms.cloud`. (not currently running)
 
 ```bash
 # Get Grafana admin password
@@ -159,4 +141,4 @@ kubectl get secret -n monitoring kube-prometheus-stack-grafana \
 | `BASE_DOMAIN` | e.g. `botcms.cloud` |
 | `OPENSEARCH_ADMIN_USER` / `OPENSEARCH_ADMIN_PASSWORD` | OpenSearch admin |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
-| `DOTCMS_IMAGE` | e.g. `mirror.gcr.io/dotcms/dotcms:LTS-24.10` |
+| `DOTCMS_IMAGE` | e.g. `mirror.gcr.io/dotcms/dotcms:latest` |
