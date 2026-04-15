@@ -1,286 +1,162 @@
 # dotCMS k3s — Multi-Tenant Hetzner Infrastructure
 
-Kubernetes cluster on Hetzner Cloud (`ash`) r unning k3s, provisioned via
+Kubernetes cluster on Hetzner Cloud (`ash`) running k3s, provisioned via
 [hetzner-k3s CLI](https://github.com/vitobotta/hetzner-k3s).
 Hosts isolated dotCMS environments at `TENANT-ENV.botcms.cloud`.
-  
+
 ## Stack
 
 | Component | Details |
 |---|---|
-| **k3s** | v1.32.0+k3s1 via hetzner-k3s CLI |
+| **k3s** | v1.32.0+k3s1 |
 | **Cilium** | CNI |
-| **Caddy** | Ingress — HA (2 replicas), on-demand TLS, CNAME routing, sticky sessions |
-| **Valkey** | Caddy cert storage — shared across replicas via `caddy-storage-redis` plugin |
-| **Hetzner CCM + CSI** | Cloud integration |
-| **CloudNativePG (CNPG)** | Shared Postgres cluster — one DB + user per `TENANT-ENV` |
-| **OpenSearch operator** | Shared OpenSearch cluster — per-tenant users scoped to `TENANT-ENV-*` indices |
-| **csi-s3 + geesefs** | S3-backed ReadWriteMany storage — Wasabi prefix `TENANT/TENANT-ENV` |
-| **Descheduler** | Bin packing — evicts pods from underutilized nodes every 5 min |
-| **Prometheus + Grafana + Loki** | Full observability stack |
-| **caddy-webhook** | Go service — validates on-demand TLS requests against live tenant namespaces |
+| **Caddy** | Ingress — HA (2 replicas), on-demand TLS, CNAME + ConfigMap routing, sticky sessions |
+| **Valkey** | Caddy cert storage shared across replicas (`caddy-storage-redis` plugin) |
+| **CloudNativePG (CNPG)** | Shared Postgres cluster — one DB + role per tenant environment |
+| **OpenSearch operator** | Shared OpenSearch cluster — per-tenant users/indices |
+| **csi-s3 + geesefs** | S3-backed ReadWriteMany storage via Wasabi |
+| **Descheduler** | Bin-packing — evicts pods from underutilized nodes every 5 min |
+| **Prometheus + Grafana + Loki** | Observability stack at `observe.botcms.cloud` |
+| **Headlamp** | Kubernetes UI at `manage.botcms.cloud` |
+| **Control Plane** | dotCMS provisioning app at `control.botcms.cloud` |
 
 ## Node Layout
 
-| Pool | Type | Count | RAM | Notes |
-|---|---|---|---|---|
-| master1/2/3 | cpx21 | 3 | 4GB | HA control plane |
-| pool-medium-worker1/2 | cpx31 | 2 | 8GB | General workloads |
-| large | cpx41 | 1–10 | 16GB | Autoscaled |
-| x-large | cpx51 | 1–10 | 32GB | Autoscaled |
+| Pool | Type | Count | RAM |
+|---|---|---|---|
+| master1/2/3 | cpx21 | 3 | 4 GB |
+| medium workers | cpx31 | 4 | 8 GB |
 
 ## Prerequisites
 
 - `kubectl`, `helm`, `envsubst` (gettext), `curl`
-- `.env` file with credentials (see `.env.example`)
-- Wildcard DNS: `*.botcms.cloud` A → cluster LB IP
+- `.env` sourced with credentials (see `.env.example`)
+- Wildcard DNS: `*.botcms.cloud` → cluster LB IP
 
 ## Quick Start
 
 ```bash
 cp .env.example .env
-# Fill in .env with your credentials
+# Fill in .env
 
-# Deploy all cluster-wide infrastructure
 source .env && ./deploy.sh
 
-# Add a tenant environment
+# Add a tenant environment manually (or via the Control Plane)
 export TENANT_ID=acme ENV_ID=prod
 source .env && ./tenant-add.sh
 
-# Remove a single environment (keeps namespace if other envs remain)
-export TENANT_ID=acme ENV_ID=prod
+# Remove a single environment
 source .env && ./tenant-remove.sh --env-only --yes
 
-# Remove an entire tenant namespace
-export TENANT_ID=acme
+# Remove entire tenant namespace
 source .env && ./tenant-remove.sh --yes
-
-# Tear down all infrastructure
-source .env && ./destroy.sh
 ```
 
-## Deploy cluster:
+## deploy.sh — Infrastructure Phases
 
 ```
-brew install vitobotta/tap/hetzner_k3s
-hetzner-k3s create --config hetzner-k3-cluster-config.yaml
+Phase 1   Helm repos
+Phase 2   Namespaces
+Phase 3   Cilium CNI
+Phase 4   Caddy ingress         on-demand TLS via cname_router plugin
+Phase 5   Wildcard DNS          *.botcms.cloud → LB IP
+Phase 6   CNPG operator
+Phase 7   OpenSearch operator
+Phase 8   OpenSearch cluster    shared 3-node cluster
+Phase 9   CSI-S3                Wasabi-backed geesefs storage class
+Phase 10  Postgres cluster      shared CNPG cluster
+Phase 11  Monitoring            Prometheus + Grafana + Loki
+Phase 12  Descheduler
+Phase 13  Valkey                Caddy cert storage
 ```
-
-
-
-## deploy.sh — Cluster Infrastructure
-
-Installs all shared operators and services in dependency order.
-
-```
-Phase 1   Helm repos            — add/update chart repositories
-Phase 2   Namespaces            — create infra namespaces
-Phase 3   Cilium CNI            — verify/install Cilium
-Phase 4   cert-manager          — CRD + webhook TLS
-Phase 5   Caddy ingress         — on-demand TLS via cname_router + webhook
-Phase 6   Wildcard DNS          — configure *.botcms.cloud → LB IP
-Phase 7   CNPG operator         — CloudNativePG
-Phase 8   OpenSearch operator   — OpenSearch operator only
-Phase 9   OpenSearch cluster    — shared 3-node OpenSearch cluster
-Phase 10  CSI-S3                — Wasabi-backed geesefs storage class
-Phase 11  Postgres cluster      — shared CNPG cluster
-Phase 12  Monitoring            — Prometheus + Grafana + Loki
-Phase 13  Descheduler           — bin-packing CronJob
-Phase 14  Valkey                — cert storage for Caddy
-```
-
-**Options:**
-```bash
-./deploy.sh --dry-run          # validate prereqs, print plan
-./deploy.sh --phase 5          # run only phase 5
-./deploy.sh --skip 3,4         # skip phases 3 and 4
-```
-
-## destroy.sh — Teardown
-
-Removes all cluster-wide infrastructure in reverse dependency order.
 
 ```bash
-./destroy.sh                   # fail if tenants still exist
-./destroy.sh --force-tenants   # also delete all tenant namespaces (DESTRUCTIVE)
-./destroy.sh --purge-crds      # also remove operator CRDs
-./destroy.sh --dry-run         # print actions without executing
+./deploy.sh --dry-run       # validate prereqs, print plan
+./deploy.sh --phase 4       # run only phase 4
+./deploy.sh --skip 3,4      # skip phases 3 and 4
 ```
 
-## tenant-add.sh — Provision a Tenant
+## Caddy — Ingress & Routing
 
-Creates a namespace-isolated dotCMS environment:
+Custom image (`dotcms/caddy-cname`) with `cname_router` and `caddy-storage-redis` plugins.
 
-```bash
-export TENANT_ID=acme ENV_ID=prod
-source .env && ./tenant-add.sh
+**Routing resolution order:**
 
-# Add a second environment to the same tenant (namespace reused)
-export TENANT_ID=acme ENV_ID=staging
-source .env && ./tenant-add.sh
+1. **Tenant lookup** — subdomain parsed as `<org>-<env>`, verified via headless service DNS, proxied to pod IP (sticky via `lb_session` cookie).
+2. **ConfigMap lookup** — any ConfigMap in `caddy-ingress` namespace with label `botcms.cloud/type=caddy-route` whose `data.hostname` matches the request is proxied to `data.clusterip-svc:data.service-port`. Used for internal services (control plane, etc.) — no Caddyfile change needed.
+
+Adding a new service route:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: route-myservice
+  namespace: caddy-ingress
+  labels:
+    botcms.cloud/type: caddy-route
+data:
+  hostname: myservice.botcms.cloud
+  clusterip-svc: myservice.mynamespace.svc.cluster.local
+  service-port: "8080"
 ```
-
-Creates (per `TENANT_ID-ENV_ID` instance):
-- Namespace `TENANT_ID` (idempotent)
-- Valkey ExternalName service + connection secret
-- OpenSearch role + user scoped to `TENANT_ID-ENV_ID-*` indices
-- Postgres role + CNPG Database CR; secret `TENANT_ID-ENV_ID-postgres` in tenant ns
-- Static PV + PVC (`s3-fuse`) backed by Wasabi prefix `TENANT_ID/TENANT_ID-ENV_ID`
-- dotCMS Deployment, HPA (1–6 replicas), PDB, ClusterIP Service, headless Service
-
-Routing and TLS are automatic — once the headless service exists, Caddy routes
-`TENANT_ID-ENV_ID.botcms.cloud` and issues a cert on the first HTTPS request.
-
-## tenant-remove.sh — Deprovision a Tenant
-
-```bash
-# Remove a single environment (keeps namespace + other envs)
-export TENANT_ID=acme ENV_ID=prod
-source .env && ./tenant-remove.sh --env-only --yes
-
-# Remove entire tenant (all environments + namespace)
-export TENANT_ID=acme
-source .env && ./tenant-remove.sh --yes
-
-# Positional args also work (used by destroy.sh --force-tenants)
-./tenant-remove.sh acme prod --env-only --yes
-```
-
-Drops Postgres DB+role from shared cluster, deletes OpenSearch user/role via
-Security API, removes static PV, and cascades namespace deletion.
 
 ## Kustomize — Tenant Manifests
 
-dotCMS tenant manifests use Kustomize rather than envsubst. A generator script produces overlays from tenant parameters, enabling future database-driven automation.
-
 ```
 kustomize/
-  dotcms-base/          — canonical Deployment, Services, HPA, PDB
-  tenants/INSTANCE/     — per-tenant overlay (names, namespace, secrets, image)
+  dotcms-base/          canonical Deployment, Services, HPA, PDB, PVC, CaddyRoute
+  tenants/INSTANCE/     per-tenant overlay — generated by the Control Plane worker
 ```
 
-**Generate and apply an overlay:**
+The Control Plane worker generates overlays automatically when provisioning environments. Manual generation:
 ```bash
 TENANT_ID=acme ENV_ID=prod DOTCMS_IMAGE=mirror.gcr.io/dotcms/dotcms:LTS-24.10 \
   ./scripts/generate-tenant-overlay.sh
 kubectl apply -k kustomize/tenants/acme-prod/
 ```
 
-**Override resource sizing:**
-```bash
-CPU_REQUEST=1 MEMORY_REQUEST=4Gi MEMORY_LIMIT=5Gi MIN_REPLICAS=2 MAX_REPLICAS=8 \
-  TENANT_ID=acme ENV_ID=prod ./scripts/generate-tenant-overlay.sh
-```
-
-**Future DB automation path:** read tenant row → call generator → `kubectl apply -k`.
-
-## Caddy — Ingress & Routing
-
-Runs as a 2-replica HA Deployment. Custom image with `cname_router` and
-`caddy-storage-redis` plugins. Cert storage in Valkey (shared across replicas).
-
-```
-customer.com  ──CNAME──▶  acme-prod.botcms.cloud  ──A──▶  LB IP
-                                  │
-                           cname_router plugin
-                                  │
-                    DNS: acme-prod-hl.acme.svc.cluster.local
-                                  │
-                         dotCMS pod (sticky via lb_session cookie)
-```
-
 ## PostgreSQL — CloudNativePG
 
-- One database per environment (`TENANT-ENV`)
-- Shared 3-node CNPG cluster in `postgres` namespace
-- Image: `dotcms/cnpg-postgresql:18` — custom build on PG 18 with pgvector + pgvectorscale
-- Backups: continuous WAL archiving + daily base backup to Wasabi S3, 30-day retention
-- Endpoints: `postgres-rw.postgres.svc.cluster.local:5432`
+- Shared 3-node cluster in `postgres` namespace
+- One database + role per environment (`TENANT-ENV`)
+- Image: `dotcms/cnpg-postgresql:18` (PG 18 + pgvector + pgvectorscale)
+- Backups: continuous WAL + daily base backups to Wasabi, 30-day retention
+- Endpoint: `postgres-rw.postgres.svc.cluster.local:5432`
 
-**Extensions (pre-installed in `template1`, inherited by all tenant DBs):**
+## Control Plane
 
-| Extension | Purpose |
-|---|---|
-| `pg_trgm` | Trigram fuzzy/partial text search |
-| `unaccent` | Strip accents for multilingual search |
-| `citext` | Case-insensitive text type |
-| `pgcrypto` | UUID generation, hashing |
-| `btree_gin` | GIN indexes on scalar types |
-| `btree_gist` | GiST indexes on scalar types |
-| `intarray` | Fast integer array operations |
-| `pg_stat_statements` | Query statistics and monitoring |
-| `vector` | pgvector — vector similarity search |
-| `diskann` | pgvectorscale — DiskANN index for large-scale vector search |
+Database-driven provisioning app at `https://control.botcms.cloud`.
 
-**PostgreSQL parameters:** `max_connections=600`, `shared_buffers=256MB`, `default_toast_compression=lz4`
+- **Auth**: Google OAuth (NextAuth v5)
+- **DB**: `dotcms_cloud_control` database in the shared CNPG cluster
+- **Worker**: background polling loop — provisions/patches/stops/decommissions tenant environments
 
-**Rebuild the image** (after updating extensions or PG version):
-```bash
-POSTGRES_IMAGE=dotcms/cnpg-postgresql:18 ./scripts/build-postgres.sh --push
-```
-
-## OpenSearch
-
-- 3-node cluster in `opensearch` namespace
-- Per-tenant user scoped to `TENANT-ENV-*` indices
-- Endpoint: `https://opensearch.opensearch.svc.cluster.local:9200`
-
-## Shared Storage — S3 FUSE
-
-- StorageClass `s3-fuse` via csi-s3 + geesefs
-- ReadWriteMany — multiple pods can mount simultaneously
-- Each tenant PVC gets its own S3 prefix (`TENANT/TENANT-ENV`)
-- Backed by Wasabi (no egress fees)
+See [`control-plane/README.md`](control-plane/README.md) for deployment details.
 
 ## Monitoring
 
-- Grafana: `https://observe.botcms.cloud` (routed by Caddy)
-- Prometheus retention: 15d
+- Grafana: `https://observe.botcms.cloud`
+- Headlamp: `https://manage.botcms.cloud`
 
 ```bash
 # Get Grafana admin password
 kubectl get secret -n monitoring kube-prometheus-stack-grafana \
-  -o jsonpath='{.data.admin-password}' | base64 -d && echo
+  -o jsonpath='{.data.admin-password}' | base64 -d
 ```
 
-## Secrets Required (.env)
-
-Copy `.env.example` → `.env` and fill in values. Source before any script.
+## Required .env Variables
 
 | Variable | Purpose |
 |---|---|
 | `KUBECONFIG` | Path to kubeconfig (default: `./kubeconfig`) |
-| `HCLOUD_TOKEN` | Hetzner Cloud API token (CCM + hetzner-k3s) |
-| `HETZNER_DNS_TOKEN` | Hetzner DNS API token (configure-dns.sh) |
-| `WASABI_ACCESS_KEY` | Wasabi S3 access key |
-| `WASABI_SECRET_KEY` | Wasabi S3 secret key |
+| `HCLOUD_TOKEN` | Hetzner Cloud API token |
+| `WASABI_ACCESS_KEY` / `WASABI_SECRET_KEY` | S3 credentials |
 | `WASABI_REGION` | e.g. `us-east-1` |
-| `WASABI_BUCKET` | Bucket for CNPG WAL + base backups |
-| `WASABI_S3FUSE_BUCKET` | Bucket for dotCMS shared assets (csi-s3) |
-| `WASABI_LOKI_BUCKET` | Bucket for Loki log storage |
-| `ACME_EMAIL` | Let's Encrypt registration email (Caddy) |
-| `BASE_DOMAIN` | Base domain, e.g. `botcms.cloud` |
-| `CADDY_ADMIN_DOMAIN` | FQDN for Caddy admin API |
-| `CADDY_ADMIN_USER` | BasicAuth user for Grafana/Headlamp via Caddy |
-| `CADDY_ADMIN_PASSWORD` | BasicAuth password (bcrypt-hashed by install-caddy.sh) |
-| `OPENSEARCH_ADMIN_USER` | OpenSearch admin user (`dotcms_admin` — the built-in `admin` is read-only in 1.x) |
-| `OPENSEARCH_ADMIN_PASSWORD` | OpenSearch admin password |
+| `WASABI_BUCKET` | CNPG WAL + backups |
+| `WASABI_S3FUSE_BUCKET` | dotCMS assets (csi-s3) |
+| `WASABI_LOKI_BUCKET` | Loki log storage |
+| `ACME_EMAIL` | Let's Encrypt email |
+| `BASE_DOMAIN` | e.g. `botcms.cloud` |
+| `OPENSEARCH_ADMIN_USER` / `OPENSEARCH_ADMIN_PASSWORD` | OpenSearch admin |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana admin password |
-| `VALKEY_PASSWORD` | Optional Valkey auth password (blank = no auth) |
-| `DOTCMS_IMAGE` | dotCMS image, e.g. `mirror.gcr.io/dotcms/dotcms:LTS-24.10` |
-
-## Verification Scripts
-
-After `deploy.sh`, run these to validate each component:
-
-```bash
-scripts/verify-core-components.sh     # Cilium, CoreDNS, metrics-server
-scripts/verify-caddy-ingress.sh       # Caddy + webhook + on-demand TLS
-scripts/verify-prometheus-targets.sh  # Prometheus scrape targets
-scripts/verify-grafana.sh             # Grafana datasources + dashboards
-scripts/verify-promtail.sh            # Promtail log shipping
-scripts/verify-loki-datasource.sh     # Loki datasource in Grafana
-scripts/verify-loki-ingestion.sh      # Loki multi-tenant log ingestion
-scripts/verify-tenant-tls.sh          # TLS cert for a tenant subdomain
-```
+| `DOTCMS_IMAGE` | e.g. `mirror.gcr.io/dotcms/dotcms:LTS-24.10` |

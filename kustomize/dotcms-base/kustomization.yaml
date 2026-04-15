@@ -1,13 +1,29 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Namespace placeholder — every overlay MUST override this with the tenant namespace.
+# Example: namespace: acme (sets namespace on all resources in the overlay)
+namespace: dotcms-tenant
+
 resources:
   - deployment.yaml
   - services.yaml
   - hpa.yaml
   - pdb.yaml
+  - resourcequota.yaml
+  - limitrange.yaml
+  - configmap.yaml
+  # caddy-route.yaml is intentionally excluded: it targets the caddy-ingress
+  # namespace (not the tenant namespace) and must be applied separately by
+  # the provisioner via applyObject — kustomize namespace: would override it.
 
-# Base labels applied to all resources
-commonLabels:
-  app.kubernetes.io/managed-by: hetzner-k3s
-  app.kubernetes.io/component: dotcms
+# Base labels applied to all resources via Kustomize labels transformer.
+# includeSelectors and includeTemplates replicate the former commonLabels behavior.
+# Overlays may add additional labels via the patches: stanza.
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: hetzner-k3s
+      app.kubernetes.io/component: dotcms
+      app.kubernetes.io/part-of: dotcms-platform
+    includeSelectors: true
+    includeTemplates: true

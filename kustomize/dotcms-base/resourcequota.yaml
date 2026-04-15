@@ -1,0 +1,17 @@
+---
+# ResourceQuota — namespace-level resource constraints per tenant.
+# Overlays MUST patch the namespace field (handled by kustomization.yaml namespace: field).
+# Hard limits match the values in templates.ts resourceQuotaSpec — keep in sync.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  # namespace is set by the overlay via kustomization.yaml namespace: field
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 80Gi
+    limits.memory: 100Gi
+    pods: "30"
+    services: "20"
+    persistentvolumeclaims: "10"

@@ -1,0 +1,28 @@
+---
+# LimitRange — per-container default requests and limits for the tenant namespace.
+# Overlays MUST patch the namespace field (handled by kustomization.yaml namespace: field).
+# Limit values match templates.ts limitRangeSpec — keep in sync.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-limits
+  # namespace is set by the overlay via kustomization.yaml namespace: field
+spec:
+  limits:
+    - type: Container
+      # Default resource requests applied when a container omits requests:
+      defaultRequest:
+        cpu: "1"
+        memory: 3Gi
+      # Default resource limits applied when a container omits limits:
+      default:
+        cpu: "1"
+        memory: 3Gi
+      # Hard ceiling — no single container may exceed these values:
+      max:
+        cpu: "16"
+        memory: 24Gi
+      # Floor — no single container may request less than these values:
+      min:
+        cpu: "500m"
+        memory: 1Gi

@@ -1,0 +1,32 @@
+---
+# CaddyRoute ConfigMap — catalog entry consumed by the Caddy ingress controller.
+# Lives in the caddy-ingress namespace (NOT the tenant namespace); the overlay
+# that references this file MUST set a namespace override for this resource.
+#
+# Placeholder values (marked with PATCH-ME) MUST be replaced by every overlay:
+#   metadata.name          → route-<instance>   (e.g. route-acme-prod)
+#   annotations + data     → per-instance hostname and service endpoints
+#
+# See templates.ts caddyRouteSpec for the programmatic equivalent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: route-dotcms-tenant        # PATCH-ME: route-<org_key>-<env_key>
+  namespace: caddy-ingress          # Fixed — Caddy watches this namespace for routes
+  labels:
+    app.kubernetes.io/managed-by: tenant-add
+    botcms.cloud/type: caddy-route
+    botcms.cloud/tenant: dotcms-tenant    # PATCH-ME: org_key
+    botcms.cloud/instance: dotcms-tenant  # PATCH-ME: <org_key>-<env_key>
+  annotations:
+    botcms.cloud/hostname: dotcms-tenant.example.com                       # PATCH-ME
+    botcms.cloud/headless-svc: dotcms-tenant-hl.dotcms-tenant.svc.cluster.local  # PATCH-ME
+    botcms.cloud/clusterip-svc: dotcms-tenant.dotcms-tenant.svc.cluster.local    # PATCH-ME
+data:
+  tenant: dotcms-tenant             # PATCH-ME: org_key
+  instance: dotcms-tenant           # PATCH-ME: <org_key>-<env_key>
+  hostname: dotcms-tenant.example.com          # PATCH-ME: <instance>.<base_domain>
+  headless-svc: dotcms-tenant-hl.dotcms-tenant.svc.cluster.local  # PATCH-ME
+  clusterip-svc: dotcms-tenant.dotcms-tenant.svc.cluster.local    # PATCH-ME
+  service-port: "8082"
+  cookie-name: lb_session

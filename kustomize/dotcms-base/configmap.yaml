@@ -1,0 +1,33 @@
+---
+# Tenant ConfigMap — holds per-tenant identity and routing metadata within the
+# tenant namespace.  Overlays patch the placeholder values (marked PATCH-ME)
+# to inject instance-specific configuration consumed by dotCMS and sidecar tooling.
+#
+# Fields that MUST be patched by every overlay:
+#   data.instance      → <org_key>-<env_key>   (e.g. acme-prod)
+#   data.tenant        → <org_key>              (e.g. acme)
+#   data.hostname      → <instance>.<base_domain>
+#   data.headless-svc  → <instance>-hl.<tenant>.svc.cluster.local
+#   data.clusterip-svc → <instance>.<tenant>.svc.cluster.local
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dotcms-tenant-config
+  # namespace is set by the overlay via kustomization.yaml namespace: field
+  labels:
+    app.kubernetes.io/name: dotcms
+    botcms.cloud/tenant: dotcms-tenant      # PATCH-ME: org_key
+    botcms.cloud/instance: dotcms-tenant    # PATCH-ME: <org_key>-<env_key>
+data:
+  # Tenant identity
+  tenant: dotcms-tenant                     # PATCH-ME: org_key
+  instance: dotcms-tenant                   # PATCH-ME: <org_key>-<env_key>
+
+  # Networking / routing
+  hostname: dotcms-tenant.example.com       # PATCH-ME: <instance>.<base_domain>
+  headless-svc: dotcms-tenant-hl.dotcms-tenant.svc.cluster.local   # PATCH-ME
+  clusterip-svc: dotcms-tenant.dotcms-tenant.svc.cluster.local     # PATCH-ME
+  service-port: "8082"
+
+  # Session affinity cookie used by the Caddy load-balancer
+  cookie-name: lb_session
