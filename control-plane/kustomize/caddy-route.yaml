@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: route-control-plane
+  namespace: caddy-ingress
+  labels:
+    botcms.cloud/type: caddy-route
+    botcms.cloud/tenant: control-plane
+    botcms.cloud/instance: control-plane
+  annotations:
+    botcms.cloud/hostname: control.botcms.cloud
+    botcms.cloud/clusterip-svc: control-plane.control-plane.svc.cluster.local
+data:
+  tenant: control-plane
+  instance: control-plane
+  hostname: control.botcms.cloud
+  clusterip-svc: control-plane.control-plane.svc.cluster.local
+  service-port: "3000"
+  cookie-name: cp_session

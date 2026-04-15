@@ -1,0 +1,141 @@
+goal: Rebuild the dotCMS control plane UI at hetzner-k3s/control-plane/ as a full
+  replacement, swapping custom Tailwind components for DaisyUI corporate theme with
+  new navigation structure, modal-based create flows, dedicated environment detail
+  pages, dual-field search, and bulk operations
+task_type: code
+brownfield_context:
+  project_type: brownfield
+  context_references:
+  - path: hetzner-k3s/control-plane/
+    role: primary
+    summary: Existing Next.js 16 TypeScript control plane app with Tailwind CSS custom
+      components, postgres.js database, and raw SQL queries
+  existing_patterns:
+  - Next.js App Router with TypeScript
+  - Raw SQL via postgres.js for database access
+  - Proxy-based lazy initialization for database client
+  - Kustomize template generation for tenant provisioning
+  - API route validation with regex patterns for org_key and env_key
+  - Middleware-based routing
+  existing_dependencies:
+  - next
+  - react
+  - typescript
+  - postgres
+  - tailwindcss
+  - daisyui
+constraints:
+- Next.js 16 TypeScript
+- DaisyUI corporate theme only
+- Full replacement deployment, not incremental migration
+- Left sidebar navigation with Orgs and Environments sections
+- Responsive layout required across mobile, tablet, and desktop
+- DaisyUI drawer with hamburger menu on mobile for sidebar
+- Lists reflow to stacked cards below md breakpoint
+- Standard Tailwind breakpoints
+- Existing test suite must continue passing
+- Bulk operations use single confirmation dialog before action
+- Bulk operation results communicated via single summary toast
+- No per-item toasts for bulk operations
+acceptance_criteria:
+- Search orgs by ID and by wildcard name
+- Create org via modal and see it appear in list
+- Org list displays created/mod dates ordered by mod_date desc
+- Click org navigates to Environments filtered by that org
+- Search environments filtered by selected org
+- Create environment via modal pre-populated with selected org
+- Click environment navigates to /envs/[org]/[env]
+- Edit environment settings and save on detail page
+- View deployment status and use lifecycle actions Stop and Decommission
+- Open latest deployment log in modal from detail page
+- Scroll through log history section on detail page
+- Sidebar nav switches between Orgs and Environments views
+- Search environments by both org_id and env_id dual-field
+- Select multiple environments via checkboxes and bulk Redeploy or Delete via Actions
+  button
+- Sidebar collapses to hamburger drawer on mobile
+- Org and environment lists reflow to stacked cards below md breakpoint
+- All 14 manual walkthrough flows verified
+- Existing automated test suite passes
+ontology_schema:
+  name: ControlPlaneUI
+  description: Domain model for the dotCMS control plane multi-tenant management interface
+    covering organizations, environments, deployments, and logs
+  fields:
+  - name: org_id
+    type: string
+    description: Unique identifier for an organization
+    required: true
+  - name: org_name
+    type: string
+    description: Display name of the organization
+    required: true
+  - name: env_id
+    type: string
+    description: Unique identifier for an environment within an org
+    required: true
+  - name: env_settings
+    type: object
+    description: Editable configuration settings for an environment
+    required: true
+  - name: env_vars
+    type: object
+    description: Key-value environment variables for deployment
+    required: true
+  - name: deployment_status
+    type: string
+    description: Current deployment state of an environment
+    required: true
+  - name: deployment_logs
+    type: array
+    description: Ordered list of deployment log entries
+    required: true
+  - name: bulk_selection
+    type: array
+    description: List of selected environment IDs for bulk operations
+    required: true
+  - name: search_query
+    type: string
+    description: Search input for filtering orgs or environments
+    required: true
+evaluation_principles:
+- name: feature_completeness
+  description: All 14 enumerated user flows are functional and manually verifiable
+  weight: 0.3
+- name: visual_consistency
+  description: UI consistently uses DaisyUI corporate theme components with no residual
+    custom Tailwind
+  weight: 0.2
+- name: responsive_fidelity
+  description: Layout correctly adapts across mobile, tablet, and desktop with drawer
+    nav and card reflow
+  weight: 0.2
+- name: test_regression
+  description: Existing automated test suite passes without modification to test expectations
+  weight: 0.15
+- name: interaction_correctness
+  description: Modals, confirmation dialogs, summary toasts, and navigation behave
+    as specified
+  weight: 0.15
+exit_conditions:
+- name: all_flows_verified
+  description: All 14 manual walkthrough flows pass verification
+  criteria: Each enumerated flow exercised and confirmed functional
+- name: tests_passing
+  description: Existing automated test suite passes
+  criteria: Test runner reports zero failures
+- name: full_replacement_deployed
+  description: New UI completely replaces old UI with no coexistence
+  criteria: Old custom Tailwind components fully removed and DaisyUI equivalents in
+    place
+- name: responsive_verified
+  description: Layout verified at mobile, tablet, and desktop breakpoints
+  criteria: Drawer nav on mobile, stacked cards below md, standard layout on desktop
+    all confirmed
+metadata:
+  seed_id: seed_e68b53e7d798
+  version: 1.0.0
+  created_at: '2026-04-14T21:30:00.627933Z'
+  ambiguity_score: 0.1255
+  interview_id: interview_20260414_211043
+  parent_seed_id: null

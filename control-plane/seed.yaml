@@ -1,0 +1,209 @@
+goal: Build a Next.js full-stack TypeScript application that automates dotCMS Kubernetes
+  tenant provisioning and lifecycle management through a database-driven polling worker
+  and operator UI, replicating tenant-add.sh and tenant-remove.sh functionality programmatically
+task_type: code
+brownfield_context:
+  project_type: greenfield
+  context_references: []
+  existing_patterns: []
+  existing_dependencies: []
+constraints:
+- TypeScript with Next.js full-stack framework
+- Raw postgres.js for database access, no ORM
+- Single Kubernetes cluster for MVP, in-cluster kubeconfig
+- Database and role creation must use raw SQL via kubectl exec into CNPG postgres
+  pod, not CNPG Database/Role CRDs
+- Google OAuth for authentication
+- No live cluster resource polling in MVP, DB state only
+- Sequential worker processing, no concurrency required
+- Poll interval 30-60 seconds
+- Pod Ready timeout of 10 minutes before marking failed
+- Exponential backoff retry up to 3 attempts before manual intervention
+- Under 20 environments at MVP scale
+- Use railpack or nixpacks to build the Docker image, no hand-written Dockerfile
+- App runs as a pod inside the Kubernetes cluster using in-cluster kubeconfig
+- Located in hetzner-k3s/control-plane/ subdirectory
+acceptance_criteria:
+- Create customer_org record via UI and persist to PostgreSQL
+- Create customer_env record via UI triggering full provisioning workflow
+- Worker detects new customer_env via polling and provisions namespace, PG role/database,
+  OpenSearch user/index, S3 PVC, Kustomize deployment, Ingress, and CaddyRoute
+- Worker waits for dotCMS pod Ready state before marking deploy_status=deployed
+- Config changes to customer_env patch Kustomize overlay in place via kubectl apply
+- Setting stop_date scales deployment to 0 replicas preserving all data
+- Setting dcomm_date triggers full teardown including DB drop, OpenSearch cleanup,
+  and namespace deletion
+- Failed operations logged to deployment_log with error detail and auto-retried with
+  exponential backoff up to 3 attempts
+- UI displays deployment status dashboard per environment
+- UI shows deployment_log with error output and manual retry button
+- Google OAuth protects all UI routes
+- Full round-trip provision and decommission works end-to-end through UI
+ontology_schema:
+  name: TenantLifecycle
+  description: Domain model for database-driven Kubernetes tenant provisioning lifecycle
+    management covering organizations, environments, and deployment tracking
+  fields:
+  - name: org_key
+    type: string
+    description: Primary key for customer organization
+    required: true
+  - name: org_long_name
+    type: string
+    description: Display name for the organization
+    required: true
+  - name: org_active
+    type: boolean
+    description: Whether the organization is currently active
+    required: true
+  - name: org_email_domain
+    type: string
+    description: Email domain associated with the organization
+    required: true
+  - name: org_data
+    type: object
+    description: JSONB field for extensible organization metadata
+    required: true
+  - name: env_key
+    type: string
+    description: Environment identifier, composite PK with org_key
+    required: true
+  - name: cluster_id
+    type: string
+    description: Target cluster identifier, reserved for future multi-cluster
+    required: true
+  - name: region_id
+    type: string
+    description: Target region identifier, reserved for future use
+    required: true
+  - name: image
+    type: string
+    description: dotCMS container image reference for the environment
+    required: true
+  - name: replicas
+    type: number
+    description: Desired replica count for the dotCMS deployment
+    required: true
+  - name: memory_req
+    type: string
+    description: Kubernetes memory request for dotCMS pods in Mi
+    required: true
+  - name: memory_limit
+    type: string
+    description: Kubernetes memory limit for dotCMS pods in Mi
+    required: true
+  - name: cpu_req
+    type: string
+    description: Kubernetes CPU request for dotCMS pods in millicores
+    required: true
+  - name: cpu_limit
+    type: string
+    description: Kubernetes CPU limit for dotCMS pods in millicores
+    required: true
+  - name: env_vars
+    type: object
+    description: JSONB field for environment-specific variables passed to dotCMS
+    required: true
+  - name: deploy_status
+    type: string
+    description: "Current deployment state: pending, provisioning, deployed, failed,\
+      \ stopped, decommissioned"
+    required: true
+  - name: last_deploy_date
+    type: string
+    description: Timestamp of last successful deployment
+    required: false
+  - name: created_date
+    type: string
+    description: Timestamp when environment was created
+    required: true
+  - name: mod_date
+    type: string
+    description: Timestamp of last modification, drives polling detection
+    required: true
+  - name: stop_date
+    type: string
+    description: Timestamp when environment was stopped, triggers scale-to-zero
+    required: false
+  - name: dcomm_date
+    type: string
+    description: Timestamp when decommissioning was requested, triggers full teardown
+    required: false
+  - name: deployment_log_id
+    type: number
+    description: Auto-increment primary key for deployment log entries
+    required: true
+  - name: log_env_key
+    type: string
+    description: Foreign key linking log entry to customer_env
+    required: true
+  - name: log_org_key
+    type: string
+    description: Foreign key linking log entry to customer_org
+    required: true
+  - name: action
+    type: string
+    description: "The lifecycle action performed: provision, patch, stop, decommission"
+    required: true
+  - name: status
+    type: string
+    description: "Outcome of the action: success, failed, retrying"
+    required: true
+  - name: error_detail
+    type: string
+    description: Structured error output from failed operations
+    required: false
+  - name: retry_count
+    type: number
+    description: Number of retry attempts for this operation
+    required: true
+  - name: last_poll_timestamp
+    type: string
+    description: Worker watermark tracking last processed mod_date
+    required: true
+evaluation_principles:
+- name: lifecycle_completeness
+  description: All four state transitions (provision, patch, stop, decommission) work
+    correctly end-to-end with proper K8s resource management
+  weight: 0.3
+- name: reliability
+  description: Worker handles partial failures gracefully with retry logic, status
+    tracking, and no orphaned resources
+  weight: 0.25
+- name: operational_visibility
+  description: UI provides clear deployment status, logs, and manual intervention
+    capability for operators
+  weight: 0.2
+- name: fidelity_to_scripts
+  description: Provisioned resources match what tenant-add.sh and tenant-remove.sh
+    produce including namespace, PG, OpenSearch, S3, Kustomize, Ingress, CaddyRoute
+  weight: 0.15
+- name: simplicity
+  description: Implementation uses polling, sequential processing, raw SQL, and minimal
+    dependencies appropriate for MVP scale
+  weight: 0.1
+exit_conditions:
+- name: full_provision_roundtrip
+  description: A customer_env created in the UI results in all K8s resources provisioned
+    and pod reaching Ready state within timeout
+  criteria: deploy_status transitions from pending to provisioning to deployed
+- name: full_decommission_roundtrip
+  description: Setting dcomm_date through UI triggers complete teardown of all K8s
+    resources and data
+  criteria: Namespace, PG database/role, OpenSearch user/index, and CaddyRoute are
+    all removed and deploy_status shows decommissioned
+- name: error_recovery
+  description: A simulated partial failure is caught, logged, retried with backoff,
+    and either succeeds or surfaces for manual intervention
+  criteria: deployment_log contains error detail and retry button in UI triggers re-execution
+- name: all_state_transitions
+  description: Each lifecycle action (provision, patch, stop, decommission) has been
+    demonstrated successfully
+  criteria: All four timestamp-driven transitions produce correct K8s resource state
+metadata:
+  seed_id: seed_4b806d759bc9
+  version: 1.0.0
+  created_at: '2026-04-14T16:05:02.109203Z'
+  ambiguity_score: 0.113
+  interview_id: interview_20260414_153714
+  parent_seed_id: null
